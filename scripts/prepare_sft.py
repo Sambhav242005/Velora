@@ -62,20 +62,64 @@ def field_text(example: Dict[str, Any], *names: str) -> str:
     return ""
 
 
+def message_role(message: Dict[str, Any]) -> str:
+    role = str(message.get("role", message.get("from", ""))).strip().lower()
+    if role in {"user", "human"}:
+        return "user"
+    if role in {"assistant", "gpt", "bot"}:
+        return "assistant"
+    if role == "system":
+        return "system"
+    return role
+
+
+def message_content(message: Dict[str, Any]) -> str:
+    return str(message.get("content", message.get("value", ""))).strip()
+
+
+def messages_to_instruction_response(messages: list[Any]) -> tuple[str, str, str]:
+    normalized = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message_role(message)
+        content = message_content(message)
+        if role and content:
+            normalized.append((role, content))
+
+    assistant_indices = [idx for idx, (role, _) in enumerate(normalized) if role == "assistant"]
+    if not assistant_indices:
+        return "", "", ""
+
+    assistant_idx = assistant_indices[-1]
+    response = normalized[assistant_idx][1]
+    user_indices = [
+        idx
+        for idx, (role, _) in enumerate(normalized[:assistant_idx])
+        if role == "user"
+    ]
+    if not user_indices:
+        return "", "", ""
+
+    user_idx = user_indices[-1]
+    instruction = normalized[user_idx][1]
+    history = []
+    for role, content in normalized[:user_idx]:
+        if role == "system":
+            history.append(f"System: {content}")
+        elif role == "user":
+            history.append(f"User: {content}")
+        elif role == "assistant":
+            history.append(f"Assistant: {content}")
+    return instruction, "\n".join(history), response
+
+
 def example_to_instruction_response(example: Dict[str, Any]) -> tuple[str, str, str]:
-    if "messages" in example and isinstance(example["messages"], list):
-        user_parts = []
-        assistant_parts = []
-        for message in example["messages"]:
-            if not isinstance(message, dict):
-                continue
-            role = str(message.get("role", "")).lower()
-            content = str(message.get("content", "")).strip()
-            if role in {"user", "human"}:
-                user_parts.append(content)
-            elif role in {"assistant", "gpt"}:
-                assistant_parts.append(content)
-        return "\n".join(user_parts), "", "\n".join(assistant_parts)
+    messages = example.get("messages")
+    if messages is None:
+        messages = example.get("conversations")
+    if isinstance(messages, list):
+        return messages_to_instruction_response(messages)
 
     instruction = field_text(example, "instruction", "prompt", "question")
     context = field_text(example, "input", "context")

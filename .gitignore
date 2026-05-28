@@ -29,6 +29,9 @@ mlrunner_package/
 *.log
 *.out
 *.err
+*.tar
+*.tar.gz
+*.zip
 tmp/
 temp/
 

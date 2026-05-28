@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Velora Training Report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101214;
+      --panel: #171b20;
+      --panel-2: #1f242b;
+      --text: #edf2f7;
+      --muted: #9aa6b2;
+      --grid: #303843;
+      --green: #5bd58c;
+      --cyan: #5cc8ff;
+      --yellow: #f3c969;
+      --red: #ff7f7f;
+      --border: #2a313a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 28px 0 14px;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .subhead {
+      margin-top: 6px;
+      color: var(--muted);
+      max-width: 760px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: var(--panel);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .metric, .chart, .note {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .metric {
+      padding: 14px 14px 13px;
+      min-height: 96px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .metric .detail {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .chart {
+      padding: 16px;
+      margin-top: 12px;
+    }
+
+    .chart-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    canvas {
+      width: 100%;
+      height: 360px;
+      display: block;
+      background: var(--panel-2);
+      border-radius: 6px;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      background: #15191e;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .note {
+      margin-top: 14px;
+      padding: 14px;
+      color: var(--muted);
+    }
+
+    code {
+      color: var(--text);
+      background: #242a32;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+
+    @media (max-width: 880px) {
+      header, .two { display: block; }
+      .badge { margin-top: 14px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      canvas { height: 300px; }
+    }
+
+    @media (max-width: 560px) {
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Velora Training Report</h1>
+      <p class="subhead">80.57M parameter decoder model trained from scratch with hybrid full, sliding, CSA, and HCA attention. Data points below come from the terminal logs captured during the RunPod run.</p>
+    </div>
+    <div class="badge">Run: <strong>1B token pretraining + Alpaca SFT</strong></div>
+  </header>
+
+  <section>
+    <div class="grid">
+      <div class="metric">
+        <div class="label">Base Tokens</div>
+        <div class="value">1.0B</div>
+        <div class="detail">FineWeb-Edu sample-10BT</div>
+      </div>
+      <div class="metric">
+        <div class="label">Best Base Val Loss</div>
+        <div class="value">3.3450</div>
+        <div class="detail">at 903.3M tokens</div>
+      </div>
+      <div class="metric">
+        <div class="label">Final Base Val Loss</div>
+        <div class="value">3.3468</div>
+        <div class="detail">near 993.6M tokens</div>
+      </div>
+      <div class="metric">
+        <div class="label">SFT Best Seen</div>
+        <div class="value">2.3183</div>
+        <div class="detail">Alpaca, step 350 snapshot</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Base Model Loss</h2>
+    <div class="chart">
+      <div class="chart-head">
+        <h3>Pretraining Loss Over Tokens</h3>
+        <div class="legend">
+          <span><i class="swatch" style="background: var(--cyan)"></i>train loss</span>
+          <span><i class="swatch" style="background: var(--green)"></i>validation loss</span>
+        </div>
+      </div>
+      <canvas id="pretrainChart" width="1100" height="360"></canvas>
+    </div>
+    <div class="note">
+      Validation improved from <code>8.5434</code> around 10M tokens to a best logged value of <code>3.3450</code> around 903M tokens. The final logged validation value stayed very close at <code>3.3468</code>.
+    </div>
+  </section>
+
+  <section>
+    <h2>SFT Loss</h2>
+    <div class="chart">
+      <div class="chart-head">
+        <h3>Alpaca SFT Loss Over Steps</h3>
+        <div class="legend">
+          <span><i class="swatch" style="background: var(--yellow)"></i>train loss</span>
+          <span><i class="swatch" style="background: var(--red)"></i>validation loss</span>
+        </div>
+      </div>
+      <canvas id="sftChart" width="1100" height="360"></canvas>
+    </div>
+    <div class="note">
+      SFT was still running when these points were captured. The validation curve had improved to <code>2.3183</code> by step 350, so this report is a snapshot rather than the final SFT result.
+    </div>
+  </section>
+
+  <section>
+    <h2>Checkpoint Summary</h2>
+    <div class="two">
+      <table>
+        <thead>
+          <tr><th>Checkpoint</th><th>Use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>best.pt</code></td><td>Best base validation checkpoint from pretraining.</td></tr>
+          <tr><td><code>final.pt</code></td><td>Final 1B-token base checkpoint; sample output looked slightly cleaner.</td></tr>
+          <tr><td><code>last.pt</code></td><td>Resume checkpoint at end of pretraining.</td></tr>
+          <tr><td><code>sft_alpaca_runpod_v2/best.pt</code></td><td>Instruction-tuned checkpoint once SFT finishes.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead>
+          <tr><th>Run Detail</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Architecture</td><td>24 layers, 512 hidden, 8 Q heads, 2 KV heads</td></tr>
+          <tr><td>Context</td><td>2048 tokens</td></tr>
+          <tr><td>Attention</td><td>full, sliding, CSA, HCA</td></tr>
+          <tr><td>Throughput</td><td>roughly 37k-39k tokens/sec during base training</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const pretrainTrain = [
+  {x: 2.621, y: 9.1314}, {x: 20.201, y: 7.8879}, {x: 40.681, y: 6.9319},
+  {x: 61.161, y: 6.2434}, {x: 81.641, y: 5.7792}, {x: 98.025, y: 5.5721},
+  {x: 118.505, y: 5.2598}, {x: 138.985, y: 5.0108}, {x: 159.465, y: 4.8063},
+  {x: 179.945, y: 4.6184}, {x: 200.425, y: 4.4707}, {x: 241.385, y: 4.1905},
+  {x: 282.345, y: 4.0503}, {x: 323.305, y: 3.8891}, {x: 364.265, y: 3.8194},
+  {x: 405.225, y: 3.7105}, {x: 446.185, y: 3.6844}, {x: 487.145, y: 3.6714},
+  {x: 528.105, y: 3.5894}, {x: 569.065, y: 3.5958}, {x: 610.025, y: 3.5404},
+  {x: 650.985, y: 3.5629}, {x: 691.945, y: 3.4644}, {x: 732.905, y: 3.4451},
+  {x: 773.865, y: 3.4396}, {x: 814.825, y: 3.4519}, {x: 855.785, y: 3.4171},
+  {x: 896.745, y: 3.4162}, {x: 904.937, y: 3.3641}, {x: 966.377, y: 3.3252},
+  {x: 982.761, y: 3.3201}, {x: 990.953, y: 3.2917}, {x: 999.145, y: 3.3775}
+];
+
+const pretrainVal = [
+  {x: 10.142, y: 8.5434}, {x: 20.201, y: 7.9025}, {x: 30.237, y: 7.3807},
+  {x: 40.272, y: 6.9166}, {x: 50.307, y: 6.5435}, {x: 60.342, y: 6.2701},
+  {x: 70.377, y: 6.0374}, {x: 80.413, y: 5.8273}, {x: 90.448, y: 5.6495},
+  {x: 100.483, y: 5.5433}, {x: 120.553, y: 5.2633}, {x: 150.659, y: 4.9505},
+  {x: 180.765, y: 4.6768}, {x: 200.835, y: 4.5442}, {x: 220.905, y: 4.3751},
+  {x: 240.976, y: 4.1998}, {x: 281.117, y: 4.0627}, {x: 301.187, y: 4.0008},
+  {x: 331.293, y: 3.9154}, {x: 361.398, y: 3.8687}, {x: 391.504, y: 3.8030},
+  {x: 421.609, y: 3.7442}, {x: 441.680, y: 3.7168}, {x: 471.785, y: 3.6540},
+  {x: 501.891, y: 3.6248}, {x: 521.961, y: 3.6059}, {x: 552.067, y: 3.5540},
+  {x: 612.278, y: 3.5421}, {x: 642.384, y: 3.5044}, {x: 672.489, y: 3.4822},
+  {x: 722.665, y: 3.4629}, {x: 732.701, y: 3.4545}, {x: 772.841, y: 3.4542},
+  {x: 782.877, y: 3.4248}, {x: 792.912, y: 3.4195}, {x: 833.053, y: 3.4147},
+  {x: 843.088, y: 3.3628}, {x: 883.229, y: 3.3680}, {x: 903.299, y: 3.3450},
+  {x: 963.510, y: 3.3868}, {x: 973.545, y: 3.3802}, {x: 983.581, y: 3.3845},
+  {x: 993.616, y: 3.3468}
+];
+
+const sftTrain = [
+  {x: 10, y: 2.6157}, {x: 20, y: 2.5848}, {x: 30, y: 2.4983}, {x: 40, y: 2.4602},
+  {x: 50, y: 2.3633}, {x: 60, y: 2.3941}, {x: 160, y: 2.3443}, {x: 170, y: 2.4211},
+  {x: 180, y: 2.2748}, {x: 190, y: 2.3811}, {x: 200, y: 2.3475}, {x: 210, y: 2.3362},
+  {x: 220, y: 2.1936}, {x: 230, y: 2.1715}, {x: 240, y: 2.2255}, {x: 250, y: 2.2952},
+  {x: 260, y: 2.2719}, {x: 270, y: 2.2810}, {x: 280, y: 2.1302}, {x: 290, y: 2.2348},
+  {x: 300, y: 2.2675}, {x: 310, y: 2.3128}, {x: 320, y: 2.2679}, {x: 330, y: 2.1684},
+  {x: 340, y: 2.2406}, {x: 350, y: 2.3110}
+];
+
+const sftVal = [
+  {x: 50, y: 2.4873}, {x: 200, y: 2.4235}, {x: 250, y: 2.3440},
+  {x: 300, y: 2.3762}, {x: 350, y: 2.3183}
+];
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function drawChart(canvasId, series, options) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(800, Math.floor(rect.width * dpr));
+  canvas.height = Math.floor(rect.height * dpr);
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.height;
+  const pad = {left: 58, right: 18, top: 18, bottom: 44};
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+  const all = series.flatMap(s => s.data);
+  const minX = options.minX ?? Math.min(...all.map(p => p.x));
+  const maxX = options.maxX ?? Math.max(...all.map(p => p.x));
+  const minY = options.minY ?? Math.floor(Math.min(...all.map(p => p.y)) * 10) / 10;
+  const maxY = options.maxY ?? Math.ceil(Math.max(...all.map(p => p.y)) * 10) / 10;
+  const xMap = x => pad.left + ((x - minX) / (maxX - minX)) * plotW;
+  const yMap = y => pad.top + (1 - ((y - minY) / (maxY - minY))) * plotH;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = cssVar("--panel-2");
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = cssVar("--grid");
+  ctx.lineWidth = 1;
+  ctx.fillStyle = cssVar("--muted");
+  ctx.font = "12px ui-sans-serif, system-ui";
+  ctx.textBaseline = "middle";
+
+  const yTicks = 6;
+  for (let i = 0; i <= yTicks; i++) {
+    const value = minY + ((maxY - minY) * i / yTicks);
+    const y = yMap(value);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+    ctx.fillText(value.toFixed(1), 12, y);
+  }
+
+  const xTicks = 5;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let i = 0; i <= xTicks; i++) {
+    const value = minX + ((maxX - minX) * i / xTicks);
+    const x = xMap(value);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, h - pad.bottom);
+    ctx.stroke();
+    ctx.fillText(options.xFormat(value), x, h - pad.bottom + 12);
+  }
+
+  ctx.strokeStyle = cssVar("--muted");
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, h - pad.bottom);
+  ctx.lineTo(w - pad.right, h - pad.bottom);
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = cssVar("--muted");
+  ctx.fillText(options.xLabel, pad.left + plotW / 2, h - 18);
+
+  ctx.save();
+  ctx.translate(18, pad.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText("loss", 0, 0);
+  ctx.restore();
+
+  for (const s of series) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    s.data.forEach((p, index) => {
+      const x = xMap(p.x);
+      const y = yMap(p.y);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = s.color;
+    for (const p of s.data) {
+      const x = xMap(p.x);
+      const y = yMap(p.y);
+      ctx.beginPath();
+      ctx.arc(x, y, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function render() {
+  drawChart("pretrainChart", [
+    {name: "train", color: cssVar("--cyan"), data: pretrainTrain},
+    {name: "validation", color: cssVar("--green"), data: pretrainVal}
+  ], {
+    minX: 0,
+    maxX: 1000,
+    minY: 3.0,
+    maxY: 9.4,
+    xLabel: "pretraining tokens",
+    xFormat: value => `${Math.round(value)}M`
+  });
+
+  drawChart("sftChart", [
+    {name: "train", color: cssVar("--yellow"), data: sftTrain},
+    {name: "validation", color: cssVar("--red"), data: sftVal}
+  ], {
+    minX: 0,
+    maxX: 1200,
+    minY: 2.0,
+    maxY: 2.7,
+    xLabel: "SFT steps",
+    xFormat: value => `${Math.round(value)}`
+  });
+}
+
+window.addEventListener("resize", render);
+render();
+</script>
+</body>
+</html>
