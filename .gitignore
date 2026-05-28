@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Training data and generated datasets
+data/
+*.bin
+*.npy
+*.npz
+
+# Checkpoints, model weights, and generated packages
+out/
+mlrunner_package/
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+
+# Logs and temporary files
+*.log
+*.out
+*.err
+tmp/
+temp/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

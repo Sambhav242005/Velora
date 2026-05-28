@@ -1,0 +1,53 @@
+project_name: sambhav-80m-sft-dolly
+seed: 1337
+out_dir: out/sft_dolly_80m
+
+data:
+  data_dir: data/sft/dolly_512
+  tokenizer_path: tokenizer_fineweb_16k/tokenizer.json
+
+model:
+  vocab_size: auto
+  n_layer: 23
+  n_embd: 512
+  n_head: 8
+  n_kv_head: 4
+  block_size: 512
+  dropout: 0.0
+  bias: false
+  use_gradient_checkpointing: true
+
+sft:
+  base_checkpoint: out/local_fineweb_80m_tiny_16k_80m/best.pt
+  max_steps: 600
+
+train:
+  dtype: bf16
+  learning_rate: 0.00004
+  min_lr: 0.000004
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup_steps: 20
+  grad_clip: 1.0
+  target_tokens_per_update: 32768
+  log_interval: 10
+  eval_interval_steps: 50
+  save_interval_steps: 100
+
+batch:
+  auto_find: true
+  auto_find_on_resume: true
+  start_micro_batch: 1
+  max_vram_gb: 8.0
+  max_micro_batch: 64
+
+checkpoint:
+  resume: auto
+  save_atomic: true
+  save_on_interrupt: true
+  save_on_exception: true
+
+eval:
+  iters: 50
+  batch_size: 4

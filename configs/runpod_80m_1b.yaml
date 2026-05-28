@@ -1,0 +1,57 @@
+project_name: sambhav-80m-runpod-1b
+seed: 1337
+out_dir: out/runpod_80m_1b
+
+data:
+  train_bin: data/processed/train.bin
+  val_bin: data/processed/val.bin
+  meta: data/processed/meta.json
+  num_workers: 0
+
+model:
+  vocab_size: auto
+  n_layer: 16
+  n_embd: 512
+  n_head: 8
+  n_kv_head: 4
+  block_size: 1024
+  dropout: 0.0
+  bias: false
+  use_gradient_checkpointing: true
+
+train:
+  max_tokens: 1000000000
+  dtype: bf16
+  compile: false
+  learning_rate: 0.0004
+  min_lr: 0.00004
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup_steps: 1000
+  grad_clip: 1.0
+  target_tokens_per_update: 131072
+  log_interval: 20
+  eval_interval_tokens: 10000000
+  save_interval_tokens: 25000000
+  save_interval_minutes: 30
+
+batch:
+  auto_find: true
+  start_micro_batch: 1
+  max_micro_batch: 64
+  reduce_on_oom: true
+  increase_if_safe: true
+  increase_every_steps: 200
+  max_vram_fraction: 0.90
+
+checkpoint:
+  resume: auto
+  keep_last_n: 3
+  save_atomic: true
+  save_on_interrupt: true
+  save_on_exception: true
+
+eval:
+  iters: 50
+  batch_size: 4
