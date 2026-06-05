@@ -1,0 +1,61 @@
+project_name: v3-sft-chat
+seed: 1337
+out_dir: out/v3_sft_chat
+
+data:
+  data_dir: data/sft/ultrachat_4k
+  tokenizer_path: tokenizer_fineweb_16k/tokenizer.json
+
+model:
+  vocab_size: auto
+  n_layer: 24
+  n_embd: 512
+  n_head: 8
+  n_kv_head: 2
+  block_size: 16384
+  dropout: 0.0
+  bias: false
+  use_gradient_checkpointing: true
+  attention_mode: hybrid
+  hybrid_attention_pattern: full,sliding,csa,hca
+  sliding_window: 2048
+  csa_block_size: 256
+  csa_local_window: 2048
+  hca_block_size: 1024
+  hca_local_window: 2048
+  rope_theta: 500000.0
+
+sft:
+  base_checkpoint: out/v3_ctx16k/final.pt
+  max_steps: 1800
+
+train:
+  dtype: bf16
+  learning_rate: 0.00002
+  min_lr: 0.000002
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup_steps: 80
+  grad_clip: 1.0
+  target_tokens_per_update: 32768
+  log_interval: 10
+  eval_interval_steps: 50
+  save_interval_steps: 150
+
+batch:
+  auto_find: true
+  auto_find_on_resume: true
+  start_micro_batch: 1
+  max_vram_fraction: 0.90
+  max_micro_batch: 32
+
+checkpoint:
+  resume: auto
+  save_atomic: true
+  save_on_interrupt: true
+  save_on_exception: true
+
+eval:
+  iters: 50
+  batch_size: 4

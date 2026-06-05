@@ -1,0 +1,229 @@
+# Sambhav 80M — Engineering Notes, Bugs & Decisions
+
+**Date:** 2026-06-05
+**Branch:** `v3-longcontext`
+**Scope:** Findings from a full read of the codebase, every bug/problem identified, the fixes applied, and the decisions taken to turn the project into a corrected, long-context, chat-focused 80M model trained on RunPod.
+
+> Step-by-step run commands live in [`docs/runpod_longcontext_plan.md`](runpod_longcontext_plan.md). This file is the *why* (findings, bugs, decisions); the plan is the *how* (runbook).
+
+---
+
+## Table of contents
+1. [Project overview](#1-project-overview)
+2. [Bugs & problems (the full register)](#2-bugs--problems-the-full-register)
+3. [Fixes & changes applied](#3-fixes--changes-applied)
+4. [Decisions & rationale](#4-decisions--rationale)
+5. [Realistic capability expectations](#5-realistic-capability-expectations)
+6. [Training pipeline (v3)](#6-training-pipeline-v3)
+7. [Open items & recommendations](#7-open-items--recommendations)
+8. [File inventory / changelog](#8-file-inventory--changelog)
+
+---
+
+## 1. Project overview
+
+A from-scratch ~80M LLaMA-style decoder-only LM ("Velora" / "sambhav-80m"). Pure single-process PyTorch, built for safe training on constrained / interruptible hardware (local GPU first, then RunPod).
+
+- **Model** (`src/model.py`): GQA, RoPE, RMSNorm (pre-norm), SwiGLU, tied embeddings, no biases; residual-scaled init. Custom **hybrid attention** cycling `full,sliding,csa,hca` per layer (csa/hca = block-summary "compressed" attention for cheap long range).
+- **Data** (`src/data.py`, `src/sft_data.py`): memmapped token shards for pretraining; fixed-length padded arrays with prompt-masked labels for SFT.
+- **Training** (`src/trainer.py`, `train.py`, `train_sft.py`): auto micro-batch finder under a VRAM cap, OOM-resilient batch halving, atomic checkpointing, save-on-SIGTERM/exception, full RNG-state resume, cosine LR.
+- **Curriculum (as found):** 1B-token base pretrain → math CPT → ultra-fineweb CPT; separately chat SFT (UltraChat/smoltalk) → reasoning-polish SFT.
+- **Stated goal (this engagement):** finish the general 80M as a usable **chat assistant**, with **long context**, reusing the already-trained 1B base.
+
+---
+
+## 2. Bugs & problems (the full register)
+
+Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) · **MEDIUM** (hurts quality) · **LOW** (hygiene/minor) · **INFO** (not a bug, noted for clarity).
+
+| # | Issue | Severity | Location | Status |
+|---|---|---|---|---|
+| B1 | RoPE convention mismatch — positional encoding not relative | **CRITICAL** | `src/model.py` rotate_half / rope cache | ✅ Fixed & verified |
+| B2 | O(T²) attention masks materialized for sliding/csa/hca | **HIGH** (long ctx) | `src/model.py:106`, `:147` | ⚠️ Open — capped at 16K; FlexAttention fix deferred |
+| B3 | No document-boundary masking in packed dataset | **MEDIUM** | `src/data.py` get_batch | ⚠️ Open — mitigated via long-doc data (PG19) |
+| B4 | Base model undertrained (1B tok for 80M) | **MEDIUM** | training budget | ✅ Addressed (+4B warm-start) |
+| B5 | ~~`.venv` committed into the repo~~ — **misdiagnosis** | LOW | `.gitignore` | ✅ Not an issue (already gitignored) |
+| B6 | Tokenizer (16k, general text) poor for code | **LOW** (conditional) | `tokenizer_fineweb_16k` | ℹ️ Noted (only matters if doing code) |
+| B7 | Always-on csa/hca compression may cost quality | **LOW/uncertain** | hybrid attention | ⬜ Ablation suggested, not run |
+| B8 | Loss target remap `-100 → -1` then `ignore_index=-1` | **INFO** | `src/model.py:280` | ℹ️ Works; no action |
+
+### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
+**What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
+
+**Where:** `src/model.py` — `rotate_half` (was lines 43–46) and `_rope_cache` (`cat((freqs, freqs))`, line 79).
+
+**Evidence (numerical, on the real code):** built a fixed `(q,k)`, applied RoPE across positions, and measured the spread of `⟨rope(q,m), rope(k,n)⟩` along each `m−n` diagonal (should be ~0 for correct RoPE):
+
+| | max within-diagonal spread |
+|---|---|
+| Before (broken) | **4.99** |
+| After fix, θ=10000 | **1.0e-05** |
+| After fix, θ=500000 | **5.7e-06** |
+
+**Fix:** `rotate_half` switched to the half-split form that matches the cache:
+```python
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    half = x.shape[-1] // 2
+    x1 = x[..., :half]
+    x2 = x[..., half:]
+    return torch.cat((-x2, x1), dim=-1)
+```
+
+**Consequence:** the fix changes positional encoding, so **all checkpoints trained before it are incompatible** (the 1B base and its downstream math-CPT / smoltalk-SFT / reasoning-SFT). Handled via the warm-start decision (D1).
+
+### B2 — O(T²) attention masks at long context (HIGH for long-context goal) ⚠️ OPEN
+**What:** Only `full` attention uses memory-efficient FlashAttention (`is_causal=True`, no explicit mask). The other three modes build dense boolean masks and pass them to SDPA, which forces the O(T²) path:
+- `sliding`: `_local_mask` builds a `[T, T]` bool (`src/model.py:106`).
+- `csa`/`hca`: `_compressed_attention` builds a `[T, T + n_blocks]` bool (`src/model.py:147`).
+
+**Impact:** ~0.27 GB per masked layer-call at 16K, ~1 GB+ at 32K — the very modes meant to make long context *cheap* are the ones that blow up memory. This caps how far context can scale.
+
+**Mitigation (taken):** target **16K** on a 48 GB GPU (tolerable). **Real fix (deferred):** rewrite the masked paths with `torch.nn.attention.flex_attention` BlockMask (O(N) memory) — see Phase 8 of the plan. Required before 32K+.
+
+### B3 — No document-boundary masking (MEDIUM) ⚠️ OPEN
+**What:** `PackedMemmapDataset.get_batch` samples contiguous `block_size+1` windows from tokens packed across many documents (separated only by EOS). There is no intra-document attention mask, so at long context the model attends across unrelated documents.
+
+**Impact:** at long context the model learns long *positions* but not necessarily long-range *dependencies*; cross-document attention is noise.
+
+**Mitigation (taken):** the context-extension phase uses **PG19** (long books), so a 16K window mostly stays within one document. Proper fix (intra-doc masking) is out of scope for now.
+
+### B4 — Base model undertrained (MEDIUM) ✅ ADDRESSED
+**What:** 1B tokens for an 80M model ≈ **12 tokens/param** — below Chinchilla-optimal (~20) and far below the small-LM norm (SmolLM-135M: ~4,400; TinyLlama-1.1B: ~2,700). This is the biggest single quality limiter, more than architecture.
+
+**Fix:** warm-start + **+4B** more clean tokens (≈5B effective). See D1.
+
+### B5 — `.venv` committed into the repo — CORRECTED: not an issue ✅
+**Original concern (incorrect):** that the virtual environment was tracked in git.
+**Re-checked 2026-06-05:** `.gitignore` already excludes `.venv/`, `out/`, `data/`, `*.pt`/`*.pth`/`*.safetensors`/`*.ckpt`, `*.npy`/`*.bin`, `__pycache__/`, and logs. `git ls-files` reports **0** tracked files under `.venv/`, `out/`, or `data/`. No action needed — the earlier finding was wrong.
+
+### B6 — Tokenizer not suitable for code (LOW, conditional) ℹ️ NOTED
+**What:** `tokenizer_fineweb_16k` is a 16k BPE trained on web text. It tokenizes code inefficiently (whitespace/indentation, identifiers, symbols → many tokens), wasting context and capacity.
+**Relevance:** only matters if the project pivots to code generation; then retrain a code-inclusive tokenizer and pretrain on code. Not relevant to the current chat goal.
+
+### B7 — Always-on csa/hca compression may cost quality (LOW/uncertain) ⬜ UNVERIFIED
+**What:** 3 of every 4 layers permanently use compressed attention. At `block_size=2048` this saves little compute but permanently reduces context fidelity in those layers — capacity a tiny model can ill afford. The Lighthouse paper's finding ("match dense only after a dense recovery phase") is indirect support that always-on compression can cost quality.
+**Suggested test (not yet run):** train ~200–300M tokens with `attention_mode: full` vs `hybrid` and compare val loss. If `full` wins at 2K, drop the hybrid for the short-context stages and keep it only where long context is the point.
+
+### B8 — Loss target remap (INFO, not a bug) ℹ️
+`src/model.py:280` remaps label `-100 → -1` then calls `cross_entropy(..., ignore_index=-1)`. Works correctly (padding/prompt positions are ignored); just an unusual choice vs. using `ignore_index=-100` directly. No action.
+
+> **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
+
+---
+
+## 3. Fixes & changes applied
+
+All on branch `v3-longcontext` (not yet committed at time of writing):
+
+| Change | File(s) | Verified |
+|---|---|---|
+| RoPE rotate_half → half-split | `src/model.py` | ✅ diagonal-spread test (B1) |
+| Added configurable `rope_theta` (default 10000) | `src/model.py` ModelConfig + rope cache | ✅ builds at θ=10000 & 500000 |
+| 6 new training configs (`v3_*`) | `configs/v3_*.yaml` | ✅ all build 80.6M model |
+| Warm-start base config from the 1B | `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True` |
+| Long-context eval (GSM8K + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
+| Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |
+| RunPod runbook | `docs/runpod_longcontext_plan.md` | — |
+
+**Re-verified 2026-06-05 (local):** all 6 `v3_*` configs build an 80.6M model; forward+backward is finite through every attention mode (`full`, `sliding`, `csa`, `hca`) and the gradient-checkpointing path; `generate()` runs; the 1B checkpoint warm-loads `strict=True`; tokenizer present.
+
+---
+
+## 4. Decisions & rationale
+
+**D1 — Warm-start from the 1B, keep the RoPE fix.** The 1B base was trained with broken RoPE (B1), so it can't be cleanly resumed under the fixed code. Chosen path: load the 1B weights as **initialization** for the corrected model and continue training. Most learned features (embeddings, FFN, knowledge) transfer; only attention re-heals. Reuses the prior work while ending with a correct, long-context-capable model. Expect an initial **loss bump** during the heal; if it doesn't drop below the old 1B level within ~500M tokens, fall back to a fresh run. *(Alternatives rejected: "continue as-is / revert the fix" — keeps the bug and kills long context; "fresh retrain" — best quality but the 1B only cost a few GPU-hours, and warm-start should beat cold start anyway.)*
+
+**D2 — Stage the positional changes.** Heal at `rope_theta=10000` (the value the 1B was trained at) for the 2K stages, so stage 1 only recovers from the rotation fix and not also a 50× frequency change. Raise to `rope_theta=500000` only at the 16K context-extension stage (the standard place to extend RoPE).
+
+**D3 — Target 16K context (not 32K+).** 16K is a large jump from 2K, fits a 48 GB GPU, and avoids the O(T²) mask blow-up (B2). 32K+ is gated on the FlexAttention rewrite (plan Phase 8).
+
+**D4 — Long-context via two-phase + long docs.** Pretrain at 2K (cheap), then a short extension phase at 16K on PG19 books (mitigates B3). Domain CPT (math, web) happens at 2K before extension.
+
+**D5 — Chat-first framing, realistic scope.** Goal is a usable chat assistant as a learning/portfolio piece. Accepts the 80M ceiling (Section 5). The 16K stage is *optional* for chat (turns are short) — it can be skipped to ship faster by pointing `v3_sft_chat` at `v3_cpt_web_2k/final.pt`.
+
+**D6 — Slightly gentler base LR (2e-4).** Matches the original 1B run so the warm-started features aren't blown away during the heal.
+
+---
+
+## 5. Realistic capability expectations
+
+An 80M model (~GPT-2-small class) trained on ~5–8B tokens is a **coherent, format-following chatbot**, not a reliable assistant. Fine-tuning sharpens and reformats capability; it does **not** add capability the scale can't support.
+
+| Tier | Expectation |
+|---|---|
+| ✅ Will do | Fluent English; follows chat format; short simple instructions; common factual completions; basic autocomplete. |
+| ⚠️ Hit or miss | Short summaries; simple Q&A; staying on-topic for a paragraph; *imitating* step-by-step reasoning. |
+| ❌ Won't do reliably | Multi-step math (GSM8K ≈ 0), accurate facts (hallucinates), long coherent documents, complex/multi-constraint instructions, genuinely *using* 16K of context (it will *accept* 16K without collapsing, which is different from reasoning over it). |
+
+**Domain specialization at 80M:** narrow + pattern-based tasks can be genuinely decent (code autocomplete of common patterns, one structured-generation task, single-step arithmetic); open-ended versions (write correct programs, solve novel math, reason over long docs) stay out of reach regardless of fine-tuning.
+
+**The bigger lever, if "actually usable" matters most:** fine-tune an open small base (Qwen2.5-1.5B, Llama-3.2-1B, SmolLM2-1.7B, Gemma-3-1B) — still "your own model," but with real capability. The from-scratch 80M is the *learning* path; that knowledge transfers directly to fine-tuning.
+
+---
+
+## 6. Training pipeline (v3)
+
+```
+your 1B  (out/runpod_sambhav_80m_v2_hybrid_1b/final.pt)
+   │  warm-start (load weights as initialization)
+   ▼
+v3_base_2k        2K, θ=10000, +4B tok, LR 2e-4     ← heals the RoPE fix
+   ▼
+v3_cpt_math_2k    2K, θ=10000                         (open-web-math)
+   ▼
+v3_cpt_web_2k     2K, θ=10000                         (Ultra-FineWeb, score-filtered)
+   ▼
+v3_ctx16k         16K, θ=500000                       ← context extension (PG19 books)
+   ▼
+v3_sft_chat       16K, chat SFT                       (UltraChat)
+   ▼
+v3_sft_reasoning  16K, reasoning polish               (smoltalk + GSM8K + reasoning)
+   ▼
+chat.py           ← talk to it
+```
+
+Full commands, dataset prep, RunPod setup, cost/time estimates, and risks: [`docs/runpod_longcontext_plan.md`](runpod_longcontext_plan.md).
+Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal+pretrain is the bulk.
+
+---
+
+## 7. Open items & recommendations
+
+- [ ] **Commit + push** `v3-longcontext` (not yet committed).
+- [ ] Put `out/runpod_sambhav_80m_v2_hybrid_1b/final.pt` on the RunPod persistent volume before Phase 1 (warm-start loads it).
+- [ ] **B2 (FlexAttention)** — required before attempting 32K+; deferred (plan Phase 8).
+- [ ] **B3 (doc masking)** — optional quality improvement for long context.
+- [x] **B5 (.venv)** — not an issue; already gitignored (re-checked 2026-06-05).
+- [ ] **B7 ablation** — full vs hybrid at 2K; only worth it if optimizing further.
+- [ ] Decide whether to keep the 16K stage (D5) or skip it for a faster chat model.
+- [ ] Watch for the warm-start **loss bump** in Phase 1; fall back to fresh run if it doesn't recover (~500M tok).
+
+---
+
+## 8. File inventory / changelog
+
+**Modified**
+- `src/model.py` — RoPE fix (B1) + configurable `rope_theta`.
+
+**Created (configs)**
+- `configs/v3_base_2k.yaml` — warm-start heal + base pretrain (2K, θ=10000, +4B, base_checkpoint = 1B).
+- `configs/v3_cpt_math_2k.yaml` — math CPT (2K, θ=10000).
+- `configs/v3_cpt_web_2k.yaml` — web CPT (2K, θ=10000).
+- `configs/v3_ctx16k.yaml` — context extension (16K, θ=500000).
+- `configs/v3_sft_chat.yaml` — chat SFT (16K).
+- `configs/v3_sft_reasoning.yaml` — reasoning-polish SFT (16K).
+
+**Created (code/docs)**
+- `scripts/eval_longctx.py` — GSM8K exact-match + loss-by-position eval.
+- `scripts/push_to_hf.py` — upload a checkpoint (+logs) to a HF model repo (reads `HF_TOKEN` from env; supports `--slim`).
+- `chat.py` — interactive multi-turn chat REPL (matches SFT prompt format).
+- `AGENTS.md` — agent working guide (commands, conventions, gotchas, how to update the project, secrets rule).
+- `DEPLOYMENT.md` — secrets, artifact storage, inference, and serving.
+- `.env.example` — template for `HF_TOKEN` / `WANDB_API_KEY` (real `.env` is gitignored).
+- `docs/runpod_longcontext_plan.md` — the RunPod runbook.
+- `docs/PROJECT_NOTES.md` — this document.
+
+**Modified (config/hygiene)**
+- `.gitignore` — added `.env` / `.env.*` (keeps `.env.example` tracked).
+
+**Secrets:** no hardcoded keys anywhere (verified by grep). The only code that uses a key (`scripts/push_to_hf.py`) reads `HF_TOKEN` from the environment.

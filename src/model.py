@@ -27,6 +27,7 @@ class ModelConfig:
     csa_local_window: int = 512
     hca_block_size: int = 256
     hca_local_window: int = 512
+    rope_theta: float = 10000.0
 
 
 class RMSNorm(nn.Module):
@@ -41,9 +42,10 @@ class RMSNorm(nn.Module):
 
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1 = x[..., ::2]
-    x2 = x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+    half = x.shape[-1] // 2
+    x1 = x[..., :half]
+    x2 = x[..., half:]
+    return torch.cat((-x2, x1), dim=-1)
 
 
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
@@ -70,7 +72,7 @@ class CausalSelfAttention(nn.Module):
         self.o_proj = nn.Linear(config.n_head * self.head_dim, config.n_embd, bias=config.bias)
         self.resid_dropout = nn.Dropout(config.dropout)
 
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
+        inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def _rope_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
