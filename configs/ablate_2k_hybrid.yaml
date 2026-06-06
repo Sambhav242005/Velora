@@ -51,7 +51,7 @@ batch:
   reduce_on_oom: true
   increase_if_safe: true
   increase_every_steps: 200
-  max_vram_fraction: 0.85
+  max_vram_fraction: 0.90
 
 checkpoint:
   resume: auto
