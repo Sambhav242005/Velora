@@ -234,6 +234,12 @@ class Trainer:
     def checkpoint_model(self) -> torch.nn.Module:
         return getattr(self.model, "_orig_mod", self.model)
 
+    def evaluation_model(self) -> torch.nn.Module:
+        # Validation runs under no-grad/eval mode. Calling the compiled training
+        # wrapper there makes Dynamo specialize again on grad_mode and can hit its
+        # recompile limit; use the original module for infrequent eval passes.
+        return self.checkpoint_model()
+
     def normalize_checkpoint_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         prefix = "_orig_mod."
         if any(key.startswith(prefix) for key in state_dict):
@@ -502,14 +508,15 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self) -> float:
-        self.model.eval()
+        eval_model = self.evaluation_model()
+        eval_model.eval()
         losses = []
         eval_iters = int(self.cfg.get("eval", {}).get("iters", 20))
         eval_bs = int(self.cfg.get("eval", {}).get("batch_size", min(4, self.state.micro_batch_size)))
         for _ in range(eval_iters):
             x, y = self.dataset.get_batch("val", eval_bs, self.model_cfg.block_size, self.device)
             with torch.autocast(device_type=self.device.type, dtype=self.dtype, enabled=self.use_amp):
-                _, loss = self.model(x, y)
+                _, loss = eval_model(x, y)
             losses.append(float(loss.cpu()))
         cleanup_cuda()
         return sum(losses) / len(losses)

@@ -52,6 +52,7 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B12 | Hybrid `torch.compile` recompile thrash on `layer_idx` → eager fallback | **MEDIUM** | `src/model.py` `CausalSelfAttention.forward` / `_attention_kind` | ✅ Fixed |
 | B13 | Gradient checkpointing was the hybrid 2K throughput ceiling (~1.8× tok/s recovered) | **PERF** | `configs/ablate_2k_hybrid.yaml` | ✅ Fixed |
 | B14 | Opt-in FlexAttention sliding path (fused kernel, removes O(T²) for sliding layers) | **PERF** | `src/model.py`, `configs/ablate_2k_hybrid_flex.yaml` | ✅ Done (sliding); csa/hca pending |
+| B15 | Validation triggered `torch.compile` recompile on `grad_mode` switch | **PERF/LOG** | `src/trainer.py` `evaluate` | ✅ Fixed |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -165,6 +166,11 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 - Checked-in 2K Flex config now inherits B13's no-checkpoint setting and raises the cap to `max_micro_batch: 28` for a higher-VRAM smoke; remeasure the combined no-checkpoint + fused-sliding throughput before treating the old checkpointed smoke as final.
 
 **Scope / next:** csa/hca still eager — their mean-pooled summary K/V aren't a pure mask, so they don't map to flex cleanly (the larger remaining win at ≥8K). The ~8% at 2K is small because only 6/24 layers are sliding and csa/hca + checkpointing dominate; the real flex payoff is long-context, not yet measured.
+
+### B15 — Validation triggered compile recompile on `grad_mode` switch (PERF/LOG) ✅ FIXED
+**What:** During compiled training, validation called the same compiled model under `@torch.no_grad()` / eval mode. Dynamo specialized `CausalSelfAttention.forward` for the training grad-mode state, then validation flipped global `grad_mode`, causing `torch._dynamo hit config.recompile_limit (8)` warnings with `GLOBAL_STATE changed: grad_mode`.
+
+**Fix:** `src/trainer.py` now routes validation through the original uncompiled module (`self.model._orig_mod` when the training model is an `OptimizedModule`). Training still uses the compiled wrapper; validation is infrequent and small, so this avoids warning spam and compile-cache pollution without slowing the hot path.
 
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
