@@ -231,6 +231,18 @@ class Trainer:
         for group in self.optimizer.param_groups:
             group["lr"] = lr
 
+    def checkpoint_model(self) -> torch.nn.Module:
+        return getattr(self.model, "_orig_mod", self.model)
+
+    def normalize_checkpoint_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        prefix = "_orig_mod."
+        if any(key.startswith(prefix) for key in state_dict):
+            return {
+                key[len(prefix):] if key.startswith(prefix) else key: value
+                for key, value in state_dict.items()
+            }
+        return state_dict
+
     def try_resume(self, resume_value: str) -> bool:
         candidates = resume_checkpoint_candidates(self.out_dir, resume_value)
         if not candidates:
@@ -251,7 +263,7 @@ class Trainer:
             print("No readable auto-resume checkpoint found.")
             return False
         print(f"Resuming from {ckpt_path}")
-        self.model.load_state_dict(ckpt["model"])
+        self.model.load_state_dict(self.normalize_checkpoint_state_dict(ckpt["model"]))
         if ckpt.get("optimizer") is not None:
             self.optimizer.load_state_dict(ckpt["optimizer"])
         if ckpt.get("scaler") is not None and self.scaler is not None:
@@ -284,14 +296,14 @@ class Trainer:
         print(f"Warm-starting weights from base checkpoint: {path}")
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        self.model.load_state_dict(state_dict)
+        self.model.load_state_dict(self.normalize_checkpoint_state_dict(state_dict))
         print("Loaded base checkpoint weights only; optimizer, scheduler, RNG, and data order start fresh.")
         return True
 
     def save(self, name: str = "last.pt") -> None:
         path = self.out_dir / name
         obj = make_checkpoint(
-            self.model,
+            self.checkpoint_model(),
             self.optimizer,
             self.scaler,
             asdict(self.state),

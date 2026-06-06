@@ -25,12 +25,18 @@ class MemoryMonitor:
     def __init__(self, device: torch.device):
         self.device = device
 
+    def cuda_device_index(self) -> int:
+        if self.device.index is not None:
+            return self.device.index
+        return torch.cuda.current_device()
+
     def stats(self) -> MemoryStats:
         vm = psutil.virtual_memory()
         if self.device.type == "cuda":
-            free, total = torch.cuda.mem_get_info(self.device)
-            allocated = torch.cuda.memory_allocated(self.device)
-            reserved = torch.cuda.memory_reserved(self.device)
+            device_index = self.cuda_device_index()
+            free, total = torch.cuda.mem_get_info(device_index)
+            allocated = torch.cuda.memory_allocated(device_index)
+            reserved = torch.cuda.memory_reserved(device_index)
             return MemoryStats(
                 ram_used_gb=gb(vm.used), ram_total_gb=gb(vm.total),
                 vram_allocated_gb=gb(allocated), vram_reserved_gb=gb(reserved),

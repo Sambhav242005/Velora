@@ -47,6 +47,7 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B7 | Always-on csa/hca compression may cost quality | **LOW/uncertain** | hybrid attention | ⬜ Ablation suggested, not run |
 | B8 | Loss target remap `-100 → -1` then `ignore_index=-1` | **INFO** | `src/model.py:280` | ℹ️ Works; no action |
 | B9 | `train.base_checkpoint` declared but ignored by LM/CPT trainer | **HIGH** | `src/trainer.py` init/resume path | ✅ Fixed & verified |
+| B10 | Compiled checkpoints save `_orig_mod.`-prefixed model keys | **HIGH** | `src/trainer.py` save/resume path | ✅ Fixed |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -113,6 +114,11 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 **Fix:** `src/trainer.py` now treats resume as highest priority; if no full resume checkpoint is loaded, it loads `train.base_checkpoint` weights only and starts a fresh optimizer/schedule/RNG. `train.py --info` now reports whether a config will resume, warm-start, or start from scratch.
 
+### B10 — `torch.compile` checkpoint key prefix (HIGH) ✅ FIXED
+**What:** When `train.compile: true` wrapped the model, checkpoint saves used the compiled module's `state_dict()`, which prefixes every model key with `_orig_mod.`. Resume builds the plain model before compiling, so `load_state_dict` failed with all normal keys missing and all `_orig_mod.*` keys unexpected.
+
+**Fix:** `src/trainer.py` now saves `self.model._orig_mod` when present and strips `_orig_mod.` while loading resume or warm-start checkpoints. This keeps compiled and non-compiled checkpoints interchangeable.
+
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
 ---
@@ -127,6 +133,7 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | Added configurable `rope_theta` (default 10000) | `src/model.py` ModelConfig + rope cache | ✅ builds at θ=10000 & 500000 |
 | 6 new training configs (`v3_*`) | `configs/v3_*.yaml` | ✅ all build 80.6M model |
 | Warm-start base config from the 1B | `src/trainer.py`, `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True`; trainer loads weights when no resume exists |
+| Compile-safe checkpoint save/load | `src/trainer.py`, `src/checkpoint.py`, `src/memory.py` | ✅ `py_compile`; RunPod failure mode reproduced from logs |
 | 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full.yaml`, `configs/ablate_2k_hybrid.yaml` | ✅ both build 80.6M model |
 | Long-context eval (GSM8K + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |

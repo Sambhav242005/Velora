@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import random
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -13,9 +14,13 @@ import torch
 def atomic_torch_save(obj: Dict[str, Any], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    torch.save(obj, tmp)
-    os.replace(tmp, path)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        torch.save(obj, tmp)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def rng_state() -> Dict[str, Any]:
