@@ -48,6 +48,8 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B8 | Loss target remap `-100 → -1` then `ignore_index=-1` | **INFO** | `src/model.py:280` | ℹ️ Works; no action |
 | B9 | `train.base_checkpoint` declared but ignored by LM/CPT trainer | **HIGH** | `src/trainer.py` init/resume path | ✅ Fixed & verified |
 | B10 | Compiled checkpoints save `_orig_mod.`-prefixed model keys | **HIGH** | `src/trainer.py` save/resume path | ✅ Fixed |
+| B11 | `torch.compile` fails on hybrid masked attention helpers | **MEDIUM** | `src/model.py` `_sliding_attention` / `_compressed_attention` | ✅ Mitigated |
+| B12 | Hybrid `torch.compile` recompile thrash on `layer_idx` → eager fallback | **MEDIUM** | `src/model.py` `CausalSelfAttention.forward` / `_attention_kind` | ✅ Fixed |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -119,6 +121,22 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 **Fix:** `src/trainer.py` now saves `self.model._orig_mod` when present and strips `_orig_mod.` while loading resume or warm-start checkpoints. This keeps compiled and non-compiled checkpoints interchangeable.
 
+### B11 — `torch.compile` fails on hybrid masked attention helpers (MEDIUM) ✅ MITIGATED
+**What:** `torch.compile` / TorchInductor failed on the hybrid `sliding`/`csa`/`hca` paths because their explicit mask and block-summary logic creates symbolic shape expressions that Inductor could not compare.
+
+**Fix:** `src/model.py` now wraps the masked helper paths with `torch.compiler.disable` / `torch._dynamo.disable` when available. Full-attention layers and surrounding projections/FFNs remain compile-eligible, while the dynamic masked attention helpers run eager until they are rewritten with FlexAttention.
+
+### B12 — Hybrid `torch.compile` recompile thrash → eager fallback (MEDIUM) ✅ FIXED
+**What:** Hybrid runs (`ablate_2k_hybrid_compile`) showed ~no tok/s gain vs eager and logged `torch._dynamo hit config.recompile_limit (8)` with `last reason: self.layer_idx == 8`. `CausalSelfAttention.forward` called `_attention_kind()`, which indexes `pattern[self.layer_idx % len(pattern)]`. All layers share one `forward` code object, so Dynamo specialized it per `layer_idx` value (one graph per layer). With ≥8 layers this exceeded `recompile_limit` and the whole `forward` frame — **including the q/k/v/o projections**, not just the masked SDPA — fell back to eager. That, on top of B11's intentional helper graph-breaks, is why compile gave no speedup.
+
+**Fix:** `src/model.py` resolves the attention kind once in `__init__` (`self._kind = self._attention_kind()`); `forward` reads the cached `self._kind` and no longer calls `_attention_kind()` or reads `self.layer_idx`, so the production guard `self.layer_idx == N` is impossible post-fix. Dynamo now guards on the kind string (≤4 distinct values) instead of `layer_idx` (one per layer).
+
+**Verification (CPU, `backend="eager"`, real n_layer=24 hybrid structure):**
+- Numerics: all 24 layers' `_kind` matches `pattern[i % 8]`; forward+backward give finite loss/grad-norm both with and without gradient checkpointing.
+- Recompile: whole-model `torch.compile` with `recompile_limit=8, fail_on_recompile_limit_hit=True` — the **old** `layer_idx` branching raises `FailOnRecompileLimitHit` and reproduces the exact production warning (`self.layer_idx == 8 # mode = pattern[self.layer_idx % len(pattern)]`); the **fixed** version completes with no limit hit.
+- `self._kind` is a plain str attribute → absent from `state_dict`; `load_state_dict(strict=True)` round-trips (resume/B10 unaffected).
+- Caveat: with gradient checkpointing ON under the eager backend the old path did *not* trip locally (non-reentrant `checkpoint` accounts recompiles differently than Inductor); Inductor codegen + actual tok/s gain must still be confirmed on the runpod GPU box. The masked helpers remain `disable`d (B11) pending the FlexAttention rewrite.
+
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
 ---
@@ -134,6 +152,7 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | 6 new training configs (`v3_*`) | `configs/v3_*.yaml` | ✅ all build 80.6M model |
 | Warm-start base config from the 1B | `src/trainer.py`, `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True`; trainer loads weights when no resume exists |
 | Compile-safe checkpoint save/load | `src/trainer.py`, `src/checkpoint.py`, `src/memory.py` | ✅ `py_compile`; RunPod failure mode reproduced from logs |
+| Hybrid compile graph-break mitigation | `src/model.py` | ✅ Dynamo eager-backend compile smoke |
 | 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full.yaml`, `configs/ablate_2k_hybrid.yaml` | ✅ both build 80.6M model |
 | Long-context eval (GSM8K + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |

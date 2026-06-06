@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple, TypeVar
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+
+FuncT = TypeVar("FuncT", bound=Callable[..., object])
+
+
+def disable_torch_compile(fn: FuncT) -> FuncT:
+    compiler = getattr(torch, "compiler", None)
+    disable = getattr(compiler, "disable", None)
+    if disable is None:
+        dynamo = getattr(torch, "_dynamo", None)
+        disable = getattr(dynamo, "disable", None)
+    if disable is None:
+        return fn
+    return disable(fn)
 
 
 @dataclass
@@ -75,6 +88,14 @@ class CausalSelfAttention(nn.Module):
         inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
+        # Resolve the attention kind once at construction. layer_idx and config are
+        # fixed for the lifetime of the module, so this never changes per forward.
+        # Computing it inside forward() makes torch.compile treat layer_idx as a
+        # dynamic guard and recompile per layer until it hits recompile_limit and
+        # falls the whole frame back to eager (projections included). Caching it as
+        # a constant lets each layer compile to its own static graph.
+        self._kind = self._attention_kind()
+
     def _rope_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
         t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
         freqs = torch.outer(t, self.inv_freq.to(device))
@@ -129,6 +150,23 @@ class CausalSelfAttention(nn.Module):
             counts[-1] = block_size - pad_tokens
         return x.sum(dim=3) / counts.view(1, 1, n_blocks, 1)
 
+    @disable_torch_compile
+    def _sliding_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        seq_len: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        return F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=self._local_mask(seq_len, self.config.sliding_window, device),
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=False,
+        )
+
+    @disable_torch_compile
     def _compressed_attention(
         self,
         q: torch.Tensor,
@@ -178,7 +216,7 @@ class CausalSelfAttention(nn.Module):
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
 
-        kind = self._attention_kind()
+        kind = self._kind
         if kind == "full":
             y = F.scaled_dot_product_attention(
                 q, k, v,
@@ -195,12 +233,7 @@ class CausalSelfAttention(nn.Module):
                     is_causal=True,
                 )
             else:
-                y = F.scaled_dot_product_attention(
-                    q, k, v,
-                    attn_mask=self._local_mask(T, self.config.sliding_window, x.device),
-                    dropout_p=self.dropout if self.training else 0.0,
-                    is_causal=False,
-                )
+                y = self._sliding_attention(q, k, v, T, x.device)
         elif kind == "csa":
             y = self._compressed_attention(q, k, v, self.config.csa_block_size, self.config.csa_local_window)
         else:
