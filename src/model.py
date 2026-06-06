@@ -28,22 +28,24 @@ try:
         create_block_mask as _create_block_mask,
     )
     _HAS_FLEX = True
+    _HAS_FUSED_FLEX = False
     # flex_attention only emits its *fused* kernel under torch.compile; called raw it
     # falls back to an unfused path that materializes the full O(T^2) score matrix
     # (slower and hungrier than the eager mask it replaces). Our block-mask builder
     # forces a graph break right before the call, so the surrounding model.compile
     # does not recapture it -- pre-compile the op itself when Triton is available.
-    # Envs without Triton (e.g. Windows) keep the raw op: correctness is identical,
-    # only the fused speedup is unavailable there.
+    # Envs without Triton (e.g. Windows) fall back to the eager sliding path.
     try:
         import triton  # noqa: F401  (flex's fused kernel is generated via Triton)
         _flex_attention_fn = torch.compile(_flex_attention_fn)
+        _HAS_FUSED_FLEX = True
     except Exception:
         pass
 except Exception:  # torch < 2.5 (e.g. the base env's 2.4.1) has no flex_attention
     _flex_attention_fn = None
     _create_block_mask = None
     _HAS_FLEX = False
+    _HAS_FUSED_FLEX = False
 
 # FlexAttention BlockMasks keyed by (kind, seq_len, window, device). create_block_mask
 # is not free and the mask is identical across every layer sharing a kind/window, so
@@ -250,7 +252,7 @@ class CausalSelfAttention(nn.Module):
         # is off (flex_attention has no dropout_p argument).
         return (
             bool(self.config.use_flex_attention)
-            and _HAS_FLEX
+            and _HAS_FUSED_FLEX
             and float(self.config.dropout) == 0.0
             and int(self.config.sliding_window) < seq_len
         )

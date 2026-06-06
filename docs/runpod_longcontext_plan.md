@@ -627,7 +627,7 @@ Total ≈ 25–45 GPU-hours. On community 4090/L40S pricing that's roughly **$15
 3. **Long-context retention through SFT.** SFT data is short, which can shrink effective context. Mitigation: keep model `block_size=16384` during SFT and use a 4K SFT length. If `eval_longctx` shows late-position loss rising after SFT, add some long-context SFT examples.
 4. **Spot/community preemption.** Mitigation: persistent `/workspace` volume + `--resume auto` (already wired) + `save_on_interrupt` — a preempted run resumes from `last.pt`/`interrupted.pt` automatically on restart.
 5. **Hybrid attention quality at 2K.** Always-on compressed layers may cost quality on short context. Mitigation: run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml` before committing the main 2K budget.
-6. **Hybrid `torch.compile` is partial.** Full attention compiles cleanly, but `sliding`/`csa`/`hca` use dynamic masks/block summaries. Those helper paths intentionally run eager under `torch.compile` until the FlexAttention rewrite.
+6. **Hybrid `torch.compile` is partial.** Full attention compiles cleanly, while `csa`/`hca` still use dynamic masks/block summaries and intentionally run eager under `torch.compile`. The opt-in FlexAttention path covers `sliding` only, and the code falls back to eager sliding unless the fused Triton-compiled FlexAttention path is available.
 7. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
 
 ---

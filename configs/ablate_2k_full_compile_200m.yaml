@@ -1,6 +1,6 @@
-project_name: ablate-2k-hybrid-flex
+project_name: ablate-2k-full-compile-200m
 seed: 1337
-out_dir: out/ablate_2k_hybrid_flex
+out_dir: out/ablate_2k_full_compile_200m
 
 data:
   data_dir: data/fineweb_processed_16k_150m
@@ -16,20 +16,19 @@ model:
   block_size: 2048
   dropout: 0.0
   bias: false
-  use_gradient_checkpointing: false  # 2K fits without it; recompute-in-backward was ~halving tok/s (PROJECT_NOTES B13). Re-enable for >=8K context.
-  attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
+  use_gradient_checkpointing: true
+  attention_mode: full
+  hybrid_attention_pattern: full
   sliding_window: 512
   csa_block_size: 64
   csa_local_window: 512
   hca_block_size: 256
   hca_local_window: 512
   rope_theta: 10000.0
-  use_flex_attention: true  # route the sliding layers through torch FlexAttention (needs torch>=2.5; falls back to eager otherwise)
 
 train:
   base_checkpoint: out/runpod_sambhav_80m_v2_hybrid_1b/final.pt
-  max_tokens: 50_000_000
+  max_tokens: 200_000_000
   dtype: bf16
   compile: true
   learning_rate: 0.0002
@@ -41,14 +40,14 @@ train:
   grad_clip: 1.0
   target_tokens_per_update: 131072
   log_interval: 20
-  eval_every_tokens: 5_000_000
-  save_every_tokens: 25_000_000
+  eval_every_tokens: 10_000_000
+  save_every_tokens: 50_000_000
   save_every_minutes: 20
 
 batch:
   auto_find: true
   start_micro_batch: 1
-  max_micro_batch: 28  # higher 2K no-grad-ckpt cap; smoke test before long runs because mb=32 was unstable
+  max_micro_batch: 128
   reduce_on_oom: true
   increase_if_safe: true
   increase_every_steps: 200
