@@ -22,6 +22,23 @@ def disable_torch_compile(fn: FuncT) -> FuncT:
     return disable(fn)
 
 
+try:
+    from torch.nn.attention.flex_attention import (
+        flex_attention as _flex_attention_fn,
+        create_block_mask as _create_block_mask,
+    )
+    _HAS_FLEX = True
+except Exception:  # torch < 2.5 (e.g. the base env's 2.4.1) has no flex_attention
+    _flex_attention_fn = None
+    _create_block_mask = None
+    _HAS_FLEX = False
+
+# FlexAttention BlockMasks keyed by (kind, seq_len, window, device). create_block_mask
+# is not free and the mask is identical across every layer sharing a kind/window, so
+# build it once and reuse. Lives at module scope so all layers share one cache.
+_BLOCK_MASK_CACHE: dict = {}
+
+
 @dataclass
 class ModelConfig:
     vocab_size: int
@@ -41,6 +58,7 @@ class ModelConfig:
     hca_block_size: int = 256
     hca_local_window: int = 512
     rope_theta: float = 10000.0
+    use_flex_attention: bool = False  # opt-in: route the `sliding` path through torch FlexAttention (needs torch>=2.5)
 
 
 class RMSNorm(nn.Module):
@@ -198,6 +216,33 @@ class CausalSelfAttention(nn.Module):
             is_causal=False,
         )
 
+    @disable_torch_compile
+    def _sliding_block_mask(self, seq_len: int, device: torch.device):
+        # Built eagerly (disabled) and cached; the flex_attention call itself stays
+        # compile-eligible so torch.compile can generate the fused kernel.
+        window = max(1, int(self.config.sliding_window))
+        key = ("sliding", int(seq_len), window, str(device))
+        block_mask = _BLOCK_MASK_CACHE.get(key)
+        if block_mask is None:
+            def sliding_mask_mod(b, h, q_idx, kv_idx):
+                return (kv_idx <= q_idx) & (kv_idx > q_idx - window)
+            block_mask = _create_block_mask(
+                sliding_mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=device,
+            )
+            _BLOCK_MASK_CACHE[key] = block_mask
+        return block_mask
+
+    def _use_flex_sliding(self, seq_len: int) -> bool:
+        # Only worth it when the window is smaller than the sequence (otherwise the
+        # eager path already takes the fused full-causal route), and only when dropout
+        # is off (flex_attention has no dropout_p argument).
+        return (
+            bool(self.config.use_flex_attention)
+            and _HAS_FLEX
+            and float(self.config.dropout) == 0.0
+            and int(self.config.sliding_window) < seq_len
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.shape
         q = self.q_proj(x).view(B, T, self.n_head, self.head_dim)
@@ -225,7 +270,9 @@ class CausalSelfAttention(nn.Module):
                 is_causal=True,
             )
         elif kind == "sliding":
-            if int(self.config.sliding_window) >= T:
+            if self._use_flex_sliding(T):
+                y = _flex_attention_fn(q, k, v, block_mask=self._sliding_block_mask(T, x.device))
+            elif int(self.config.sliding_window) >= T:
                 y = F.scaled_dot_product_attention(
                     q, k, v,
                     attn_mask=None,
