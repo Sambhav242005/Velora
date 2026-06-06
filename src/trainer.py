@@ -117,12 +117,14 @@ class Trainer:
             print(f"Batch VRAM cap: {vram_limit:.2f}GB peak reserved")
         print(f"Initial memory: {self.monitor.short()}")
 
+        resume_value = resume_override if resume_override is not None else config.get("checkpoint", {}).get("resume", "auto")
+        resumed = self.try_resume(resume_value)
+        if not resumed:
+            self.try_warm_start()
+
         if config["train"].get("compile", False) and hasattr(torch, "compile"):
             print("Compiling model with torch.compile... first step may be slow.")
             self.model = torch.compile(self.model)
-
-        resume_value = resume_override if resume_override is not None else config.get("checkpoint", {}).get("resume", "auto")
-        self.try_resume(resume_value)
 
         batch_cfg = config.get("batch", {})
         auto_find_on_resume = bool(batch_cfg.get("auto_find_on_resume", False) or batch_cfg.get("max_vram_gb") is not None)
@@ -229,10 +231,10 @@ class Trainer:
         for group in self.optimizer.param_groups:
             group["lr"] = lr
 
-    def try_resume(self, resume_value: str) -> None:
+    def try_resume(self, resume_value: str) -> bool:
         candidates = resume_checkpoint_candidates(self.out_dir, resume_value)
         if not candidates:
-            return
+            return False
         ckpt_path = None
         ckpt = None
         for candidate in candidates:
@@ -247,7 +249,7 @@ class Trainer:
                 print(f"Skipping unreadable checkpoint {candidate}: {error}")
         if ckpt is None:
             print("No readable auto-resume checkpoint found.")
-            return
+            return False
         print(f"Resuming from {ckpt_path}")
         self.model.load_state_dict(ckpt["model"])
         if ckpt.get("optimizer") is not None:
@@ -270,6 +272,21 @@ class Trainer:
             f"Resumed step={self.state.step}, tokens_seen={self.state.tokens_seen}, "
             f"{remaining_text}, micro_batch={self.state.micro_batch_size}"
         )
+        return True
+
+    def try_warm_start(self) -> bool:
+        base_checkpoint = self.cfg.get("train", {}).get("base_checkpoint")
+        if not base_checkpoint:
+            return False
+        path = Path(base_checkpoint)
+        if not path.exists():
+            raise FileNotFoundError(f"train.base_checkpoint not found: {path}")
+        print(f"Warm-starting weights from base checkpoint: {path}")
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        self.model.load_state_dict(state_dict)
+        print("Loaded base checkpoint weights only; optimizer, scheduler, RNG, and data order start fresh.")
+        return True
 
     def save(self, name: str = "last.pt") -> None:
         path = self.out_dir / name

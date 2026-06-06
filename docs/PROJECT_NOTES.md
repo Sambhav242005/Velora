@@ -24,7 +24,7 @@
 
 A from-scratch ~80M LLaMA-style decoder-only LM ("Velora" / "sambhav-80m"). Pure single-process PyTorch, built for safe training on constrained / interruptible hardware (local GPU first, then RunPod).
 
-- **Model** (`src/model.py`): GQA, RoPE, RMSNorm (pre-norm), SwiGLU, tied embeddings, no biases; residual-scaled init. Custom **hybrid attention** cycling `full,sliding,csa,hca` per layer (csa/hca = block-summary "compressed" attention for cheap long range).
+- **Model** (`src/model.py`): GQA, RoPE, RMSNorm (pre-norm), SwiGLU, tied embeddings, no biases; residual-scaled init. Custom **hybrid attention** cycling a final-global local/compressed/global pattern per layer (csa/hca = block-summary "compressed" attention for cheap long range).
 - **Data** (`src/data.py`, `src/sft_data.py`): memmapped token shards for pretraining; fixed-length padded arrays with prompt-masked labels for SFT.
 - **Training** (`src/trainer.py`, `train.py`, `train_sft.py`): auto micro-batch finder under a VRAM cap, OOM-resilient batch halving, atomic checkpointing, save-on-SIGTERM/exception, full RNG-state resume, cosine LR.
 - **Curriculum (as found):** 1B-token base pretrain → math CPT → ultra-fineweb CPT; separately chat SFT (UltraChat/smoltalk) → reasoning-polish SFT.
@@ -46,6 +46,7 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B6 | Tokenizer (16k, general text) poor for code | **LOW** (conditional) | `tokenizer_fineweb_16k` | ℹ️ Noted (only matters if doing code) |
 | B7 | Always-on csa/hca compression may cost quality | **LOW/uncertain** | hybrid attention | ⬜ Ablation suggested, not run |
 | B8 | Loss target remap `-100 → -1` then `ignore_index=-1` | **INFO** | `src/model.py:280` | ℹ️ Works; no action |
+| B9 | `train.base_checkpoint` declared but ignored by LM/CPT trainer | **HIGH** | `src/trainer.py` init/resume path | ✅ Fixed & verified |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -107,6 +108,11 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 ### B8 — Loss target remap (INFO, not a bug) ℹ️
 `src/model.py:280` remaps label `-100 → -1` then calls `cross_entropy(..., ignore_index=-1)`. Works correctly (padding/prompt positions are ignored); just an unusual choice vs. using `ignore_index=-100` directly. No action.
 
+### B9 — `train.base_checkpoint` ignored by LM/CPT trainer (HIGH) ✅ FIXED
+**What:** The `v3_*` LM/CPT configs chain stages with `train.base_checkpoint`, but `Trainer` only tried same-folder resume checkpoints. A fresh `v3_base_2k` or CPT run would silently start from random initialization instead of loading the intended base weights.
+
+**Fix:** `src/trainer.py` now treats resume as highest priority; if no full resume checkpoint is loaded, it loads `train.base_checkpoint` weights only and starts a fresh optimizer/schedule/RNG. `train.py --info` now reports whether a config will resume, warm-start, or start from scratch.
+
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
 ---
@@ -120,7 +126,8 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | RoPE rotate_half → half-split | `src/model.py` | ✅ diagonal-spread test (B1) |
 | Added configurable `rope_theta` (default 10000) | `src/model.py` ModelConfig + rope cache | ✅ builds at θ=10000 & 500000 |
 | 6 new training configs (`v3_*`) | `configs/v3_*.yaml` | ✅ all build 80.6M model |
-| Warm-start base config from the 1B | `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True` |
+| Warm-start base config from the 1B | `src/trainer.py`, `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True`; trainer loads weights when no resume exists |
+| 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full.yaml`, `configs/ablate_2k_hybrid.yaml` | ✅ both build 80.6M model |
 | Long-context eval (GSM8K + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |
 | RunPod runbook | `docs/runpod_longcontext_plan.md` | — |
@@ -142,6 +149,10 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 **D5 — Chat-first framing, realistic scope.** Goal is a usable chat assistant as a learning/portfolio piece. Accepts the 80M ceiling (Section 5). The 16K stage is *optional* for chat (turns are short) — it can be skipped to ship faster by pointing `v3_sft_chat` at `v3_cpt_web_2k/final.pt`.
 
 **D6 — Slightly gentler base LR (2e-4).** Matches the original 1B run so the warm-started features aren't blown away during the heal.
+
+**D7 — Keep the hybrid pattern final-global.** Gemma-style local/global hybrids should end with a precise global path. The `v3_*` hybrid configs now use `full,sliding,csa,hca,sliding,csa,hca,full`, which keeps 6 of 24 layers global while making layer 23 `full` instead of `hca`.
+
+**D8 — Ablate full vs hybrid at 2K before spending the main budget.** `configs/ablate_2k_full.yaml` and `configs/ablate_2k_hybrid.yaml` share data, token budget, optimizer, and warm-start checkpoint. If full attention wins at 2K, use full for the short-context base/CPT stages and reserve hybrid for 16K.
 
 ---
 
@@ -194,7 +205,8 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 - [ ] **B2 (FlexAttention)** — required before attempting 32K+; deferred (plan Phase 8).
 - [ ] **B3 (doc masking)** — optional quality improvement for long context.
 - [x] **B5 (.venv)** — not an issue; already gitignored (re-checked 2026-06-05).
-- [ ] **B7 ablation** — full vs hybrid at 2K; only worth it if optimizing further.
+- [ ] **B7 ablation** — run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml`.
+- [x] **B9 warm-start loader** — fixed in `src/trainer.py`; verify with `train.py --info` before launching.
 - [ ] Decide whether to keep the 16K stage (D5) or skip it for a faster chat model.
 - [ ] Watch for the warm-start **loss bump** in Phase 1; fall back to fresh run if it doesn't recover (~500M tok).
 
@@ -204,8 +216,13 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 
 **Modified**
 - `src/model.py` — RoPE fix (B1) + configurable `rope_theta`.
+- `src/trainer.py` — LM/CPT `train.base_checkpoint` warm-start loader (B9).
+- `train.py` — `--info` now reports resume vs base-checkpoint warm-start.
+- `configs/v3_*.yaml` — hybrid pattern changed to end each 24-layer stack on a `full` layer.
 
 **Created (configs)**
+- `configs/ablate_2k_full.yaml` — 50M-token 2K full-attention comparison run.
+- `configs/ablate_2k_hybrid.yaml` — matched 50M-token 2K hybrid comparison run.
 - `configs/v3_base_2k.yaml` — warm-start heal + base pretrain (2K, θ=10000, +4B, base_checkpoint = 1B).
 - `configs/v3_cpt_math_2k.yaml` — math CPT (2K, θ=10000).
 - `configs/v3_cpt_web_2k.yaml` — web CPT (2K, θ=10000).
@@ -215,6 +232,8 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 
 **Created (code/docs)**
 - `scripts/eval_longctx.py` — GSM8K exact-match + loss-by-position eval.
+- `scripts/prepare_lm_hf.py` — generic HF dataset to causal-LM token shards.
+- `scripts/prepare_reasoning_mix.py` — smoltalk/GSM8K/optional reasoning SFT mix.
 - `scripts/push_to_hf.py` — upload a checkpoint (+logs) to a HF model repo (reads `HF_TOKEN` from env; supports `--slim`).
 - `chat.py` — interactive multi-turn chat REPL (matches SFT prompt format).
 - `AGENTS.md` — agent working guide (commands, conventions, gotchas, how to update the project, secrets rule).

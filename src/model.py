@@ -21,7 +21,7 @@ class ModelConfig:
     bias: bool = False
     use_gradient_checkpointing: bool = False
     attention_mode: str = "full"
-    hybrid_attention_pattern: str = "full,sliding,csa,hca"
+    hybrid_attention_pattern: str = "full,sliding,csa,hca,sliding,csa,hca,full"
     sliding_window: int = 512
     csa_block_size: int = 64
     csa_local_window: int = 512

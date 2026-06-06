@@ -18,7 +18,7 @@ model:
   bias: false
   use_gradient_checkpointing: true
   attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca
+  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 2048
   csa_block_size: 256
   csa_local_window: 2048

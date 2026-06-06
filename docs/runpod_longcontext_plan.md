@@ -4,7 +4,7 @@
 
 **Goal:** Train a coherent ~80M LLaMA-style model with a **16K-token context window**, end-to-end on RunPod, with a clean curriculum: base pretrain → domain CPT → context extension → instruction tuning.
 
-**Architecture:** Two-phase context strategy — pretrain the bulk at 2K (cheap), then a short continued-pretraining phase at 16K on long documents to teach long-range positions/dependencies. RoPE is now correct (fixed) and uses a high base frequency (`rope_theta=500000`) tuned for long context. The existing `full,sliding,csa,hca` hybrid attention provides cheap long-range coverage; only the `full` layers (1 in 4) carry the precise global path.
+**Architecture:** Two-phase context strategy — pretrain the bulk at 2K (cheap), then a short continued-pretraining phase at 16K on long documents to teach long-range positions/dependencies. RoPE is now correct (fixed) and uses a high base frequency (`rope_theta=500000`) tuned for long context. The hybrid attention pattern keeps local/compressed layers for coverage but starts and ends each 24-layer stack with `full` global attention.
 
 **Tech stack:** PyTorch 2.11 (bf16, SDPA/FlashAttention, gradient checkpointing), HuggingFace `datasets` (streaming), the repo's `train.py` / `train_sft.py`, single rented GPU (24–48 GB).
 
@@ -16,6 +16,7 @@
 |---|---|---|
 | Target context | **16K** | Big jump from 2K, fits a 24–48 GB GPU without an attention rewrite. 32K+ needs the FlexAttention task (Phase 8, optional). |
 | Base init | **Warm-start from your 1B** | Load `runpod_sambhav_80m_v2_hybrid_1b/final.pt` as initialization (not resume); attention re-heals over the first chunk of training. |
+| Hybrid pattern | **final-global** | Use `full,sliding,csa,hca,sliding,csa,hca,full` so each 24-layer stack ends on a precise global layer while keeping 6 full layers total. |
 | `rope_theta` | **10000 for 2K stages → 500000 at 16K** | Heal the rotation fix first at the frequency the 1B was trained on; raise theta only at the context-extension stage. |
 | Base pretrain tokens | **+4B (≈5B effective)** | Warm-started from 1B; 4B more clean tokens fixes the under-training. |
 | Context-extension tokens | **~500M** on long books (PG19) | Extension needs *long* docs, not packed short ones. |
@@ -71,7 +72,7 @@ model:
   bias: false
   use_gradient_checkpointing: true
   attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca
+  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 512
   csa_block_size: 64
   csa_local_window: 512
@@ -144,7 +145,7 @@ model:
   bias: false
   use_gradient_checkpointing: true
   attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca
+  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 512
   csa_block_size: 64
   csa_local_window: 512
@@ -230,7 +231,7 @@ model:
   bias: false
   use_gradient_checkpointing: true
   attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca
+  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 2048
   csa_block_size: 256
   csa_local_window: 2048
@@ -303,7 +304,7 @@ model:
   bias: false
   use_gradient_checkpointing: true
   attention_mode: hybrid
-  hybrid_attention_pattern: full,sliding,csa,hca
+  hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 2048
   csa_block_size: 256
   csa_local_window: 2048
@@ -563,7 +564,7 @@ python scripts/prepare_sft.py \
 
 ## Phase 6 — Reasoning-polish SFT
 
-- [ ] Prepare the reasoning mix (smoltalk + GSM8K + reasoning):
+- [ ] Prepare the reasoning mix (smoltalk + GSM8K by default; optional extra reasoning dataset via flags):
 
 ```bash
 python scripts/prepare_reasoning_mix.py \
@@ -625,7 +626,8 @@ Total ≈ 25–45 GPU-hours. On community 4090/L40S pricing that's roughly **$15
 2. **No document-boundary masking** in `PackedMemmapDataset` — windows cross document boundaries. Mitigation: Phase 4 uses PG19 (long books), so a 16K window is mostly within one document. (A proper fix is intra-document attention masking, out of scope here.)
 3. **Long-context retention through SFT.** SFT data is short, which can shrink effective context. Mitigation: keep model `block_size=16384` during SFT and use a 4K SFT length. If `eval_longctx` shows late-position loss rising after SFT, add some long-context SFT examples.
 4. **Spot/community preemption.** Mitigation: persistent `/workspace` volume + `--resume auto` (already wired) + `save_on_interrupt` — a preempted run resumes from `last.pt`/`interrupted.pt` automatically on restart.
-5. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
+5. **Hybrid attention quality at 2K.** Always-on compressed layers may cost quality on short context. Mitigation: run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml` before committing the main 2K budget.
+6. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
 
 ---
 
@@ -634,4 +636,4 @@ Total ≈ 25–45 GPU-hours. On community 4090/L40S pricing that's roughly **$15
 - Covers: RoPE correctness, rope_theta scaling, base over-training, two-phase 2K→16K context, domain CPT, instruction tuning, eval, and the 32K+ path. ✅
 - Every config is full (no "same as above" code omissions for the structurally distinct files; the near-duplicates 0.4/0.6 list exact field diffs). ✅
 - `base_checkpoint`/`out_dir` chain is consistent: `v3_base_2k → v3_cpt_math_2k → v3_cpt_web_2k → v3_ctx16k → v3_sft_chat → v3_sft_reasoning`. ✅
-- Open decisions you may want to change before starting: target context (16K), base token budget (5B), and dataset choices for math/web.
+- Open decisions you may want to change before starting: target context (16K), base token budget (5B), dataset choices for math/web, and whether the 2K ablation favors full or hybrid attention.

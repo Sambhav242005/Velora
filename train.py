@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import torch
 
@@ -75,6 +76,12 @@ def print_info(cfg, resume_override=None) -> None:
     candidates = resume_checkpoint_candidates(cfg["out_dir"], resume_value)
     if not candidates:
         print("Resume checkpoint: none")
+        base_checkpoint = cfg.get("train", {}).get("base_checkpoint")
+        if base_checkpoint:
+            status = "exists" if Path(base_checkpoint).exists() else "missing"
+            print(f"Base checkpoint warm-start: {base_checkpoint} ({status})")
+        else:
+            print("Base checkpoint warm-start: none")
         return
     ckpt_path = None
     ckpt = None
@@ -100,6 +107,9 @@ def print_info(cfg, resume_override=None) -> None:
         print(f"Remaining steps: {max(0, limit_value - steps_seen):,}")
     else:
         print(f"Remaining tokens: {max(0, limit_value - tokens_seen):,}")
+    base_checkpoint = cfg.get("train", {}).get("base_checkpoint")
+    if base_checkpoint:
+        print("Base checkpoint warm-start: skipped because a resume checkpoint is available")
 
 
 def main():

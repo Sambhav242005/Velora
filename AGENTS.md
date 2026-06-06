@@ -73,7 +73,7 @@ docs/            # PROJECT_NOTES.md (findings/bugs/decisions), runpod_longcontex
 - **Config-driven.** Add a run = add a `configs/<name>.yaml`. Model block, optimizer, batch finder, checkpointing, and eval are all config keys. `vocab_size: auto` resolves from the tokenizer/dataset meta.
 - **Checkpoints** are dicts (`model`, `optimizer`, `scaler`, `train_state`, `config`, `rng_state`, `data_rng_state`) written atomically. Loaded with `torch.load(..., weights_only=False)`. `out/<run>/last.pt` is always kept current; `best.pt` tracks lowest val loss.
 - **Resume is automatic** (`--resume auto`): finds `last.pt`/`interrupted.pt`/`emergency.pt`/latest milestone/`best.pt`. Designed for spot-instance preemption (SIGTERM → save → resume).
-- **Warm-start vs resume:** `train.base_checkpoint` loads *weights only* into a freshly-built model (new optimizer/schedule). Resume restores full training state. SFT (`train_sft.py`) rebuilds the model from the checkpoint's stored config; `train.py` builds from the current YAML.
+- **Warm-start vs resume:** resume has priority and restores full training state. If no resume checkpoint is loaded, `train.base_checkpoint` loads *weights only* into a freshly-built model (new optimizer/schedule). SFT (`train_sft.py`) rebuilds the model from the checkpoint's stored config; `train.py` builds from the current YAML.
 - Match the surrounding style: type hints, `from __future__ import annotations`, dataclasses, no external framework magic.
 - **Secrets** (`HF_TOKEN`, `WANDB_API_KEY`) are read from environment variables only — never hardcode them in code, configs, or git, and never `print` them (logs get uploaded). New code that needs a key must read it from `os.environ`. See `DEPLOYMENT.md`.
 
@@ -82,6 +82,7 @@ docs/            # PROJECT_NOTES.md (findings/bugs/decisions), runpod_longcontex
 - **RoPE (`src/model.py`).** `rotate_half` uses the **half-split** convention and must stay paired with the `cat((freqs, freqs))` cos/sin cache. A previous version mixed half-split with an interleaved `rotate_half`, which broke relative-position encoding (see B1 in `docs/PROJECT_NOTES.md`). **Do not "simplify" `rotate_half` back to the `::2` / `1::2` interleaved form** — it silently breaks RoPE. `rope_theta` is a `ModelConfig` field (default 10000); long-context runs raise it (e.g., 500000).
 - **Checkpoint compatibility.** Changing positional encoding (RoPE form or `rope_theta`) makes older checkpoints incompatible. The current `v3_*` configs warm-start from the pre-fix 1B base on purpose (with a heal phase) — see `docs/PROJECT_NOTES.md` §4.
 - **Long-context memory (B2).** `sliding`/`csa`/`hca` attention build explicit O(T²) masks (`src/model.py` `_local_mask`, `_compressed_attention`); only `full` uses memory-efficient FlashAttention. Practical context ceiling is ~16K until those paths are migrated to FlexAttention. Don't assume long context is free.
+- **Hybrid attention pattern.** The current default is final-global: `full,sliding,csa,hca,sliding,csa,hca,full`. Keep future long-context configs ending on a `full` layer unless you are deliberately running an ablation.
 - **No document-boundary masking** in `PackedMemmapDataset` (B3) — windows cross document boundaries.
 
 ## Verifying changes (no test suite)
