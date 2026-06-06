@@ -16,7 +16,7 @@ model:
   block_size: 2048
   dropout: 0.0
   bias: false
-  use_gradient_checkpointing: true
+  use_gradient_checkpointing: false  # 2K fits without it; recompute-in-backward was ~halving tok/s (PROJECT_NOTES B13). Re-enable for >=8K context.
   attention_mode: hybrid
   hybrid_attention_pattern: full,sliding,csa,hca,sliding,csa,hca,full
   sliding_window: 512
@@ -47,11 +47,11 @@ train:
 batch:
   auto_find: true
   start_micro_batch: 1
-  max_micro_batch: 64
+  max_micro_batch: 20  # without grad-ckpt the masked-attn activations are large; mb=20 is the proven-stable point (~27.7GB reserved, ~50k tok/s)
   reduce_on_oom: true
   increase_if_safe: true
   increase_every_steps: 200
-  max_vram_fraction: 0.90
+  max_vram_fraction: 0.85
 
 checkpoint:
   resume: auto

@@ -50,6 +50,7 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B10 | Compiled checkpoints save `_orig_mod.`-prefixed model keys | **HIGH** | `src/trainer.py` save/resume path | ✅ Fixed |
 | B11 | `torch.compile` fails on hybrid masked attention helpers | **MEDIUM** | `src/model.py` `_sliding_attention` / `_compressed_attention` | ✅ Mitigated |
 | B12 | Hybrid `torch.compile` recompile thrash on `layer_idx` → eager fallback | **MEDIUM** | `src/model.py` `CausalSelfAttention.forward` / `_attention_kind` | ✅ Fixed |
+| B13 | Gradient checkpointing was the hybrid 2K throughput ceiling (~1.8× tok/s recovered) | **PERF** | `configs/ablate_2k_hybrid.yaml` | ✅ Fixed |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -135,7 +136,20 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 - Numerics: all 24 layers' `_kind` matches `pattern[i % 8]`; forward+backward give finite loss/grad-norm both with and without gradient checkpointing.
 - Recompile: whole-model `torch.compile` with `recompile_limit=8, fail_on_recompile_limit_hit=True` — the **old** `layer_idx` branching raises `FailOnRecompileLimitHit` and reproduces the exact production warning (`self.layer_idx == 8 # mode = pattern[self.layer_idx % len(pattern)]`); the **fixed** version completes with no limit hit.
 - `self._kind` is a plain str attribute → absent from `state_dict`; `load_state_dict(strict=True)` round-trips (resume/B10 unaffected).
-- Caveat: with gradient checkpointing ON under the eager backend the old path did *not* trip locally (non-reentrant `checkpoint` accounts recompiles differently than Inductor); Inductor codegen + actual tok/s gain must still be confirmed on the runpod GPU box. The masked helpers remain `disable`d (B11) pending the FlexAttention rewrite.
+- **GPU outcome (runpod, torch 2.4.1):** the `recompile_limit (8)` / `self.layer_idx == 8` warning is **gone** and numerics are bit-identical (loss 3.7320, val 3.5924). But steady-state tok/s did **not** move (~28k both ways) — see B13 for why: with the masked helpers still eager (B11) compile has only the elementwise glue to fuse, and the real ceiling was gradient checkpointing, not the recompile. The fix is still correct and worth keeping (removes wasted recompilation + eager fallback of projections); it just isn't a throughput lever on its own. The masked helpers remain `disable`d (B11) pending the FlexAttention rewrite (blocked: `flex_attention` needs torch ≥2.5; runpod has 2.4.1).
+
+### B13 — Gradient checkpointing was the hybrid throughput ceiling at 2K (PERF) ✅ FIXED
+**What:** `ablate_2k_hybrid*` ran `use_gradient_checkpointing: true`, which re-runs every block's forward during backward (an extra full forward per step, ~+50–100% compute). At 2K context this is pure overhead — the model has ~16 GB to spare without it. It also masked the real cost behind "compile does nothing" (B12): compile/eager/checkpointed all sat at ~28k tok/s because the second forward dominated.
+
+**Evidence (runpod, 40-step smoke, hybrid+compile, GPU 44.4 GB):**
+
+| config | micro_batch | reserved VRAM | steady tok/s |
+|---|---|---|---|
+| grad-ckpt ON (baseline) | 72 | 39.8 GB | ~28,000 |
+| grad-ckpt OFF, auto mb=32 | 32→16 | 43.9 GB (edge) | 50,782 then OOM→recompile→20k |
+| **grad-ckpt OFF, mb=20 (shipped)** | 20 | **27.7 GB** | **~50,400 (stable)** |
+
+**Fix:** `configs/ablate_2k_hybrid.yaml` → `use_gradient_checkpointing: false`, `max_micro_batch: 20`, `max_vram_fraction: 0.85`. ~**1.8× tok/s**, stable (16 GB headroom), mathematically identical training (checkpointing only trades compute for memory). **Scope:** 2K only — re-enable checkpointing for ≥8K context where the activations no longer fit. Secondary finding: the auto-batch-finder underestimates real training memory by ~4 GB (compile workspace/fragmentation), so without checkpointing it picked an unstable mb=32 that OOM'd mid-run and triggered a torch.compile shape-recompile; capping `max_micro_batch` avoids it.
 
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
@@ -153,7 +167,7 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | Warm-start base config from the 1B | `src/trainer.py`, `configs/v3_base_2k.yaml` | ✅ 1B loads `strict=True`; trainer loads weights when no resume exists |
 | Compile-safe checkpoint save/load | `src/trainer.py`, `src/checkpoint.py`, `src/memory.py` | ✅ `py_compile`; RunPod failure mode reproduced from logs |
 | Hybrid compile graph-break mitigation | `src/model.py` | ✅ Dynamo eager-backend compile smoke |
-| 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full.yaml`, `configs/ablate_2k_hybrid.yaml` | ✅ both build 80.6M model |
+| 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full*.yaml`, `configs/ablate_2k_hybrid*.yaml` | ✅ 50M + 200M configs build 80.6M model |
 | Long-context eval (GSM8K + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |
 | RunPod runbook | `docs/runpod_longcontext_plan.md` | — |
@@ -178,7 +192,7 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 
 **D7 — Keep the hybrid pattern final-global.** Gemma-style local/global hybrids should end with a precise global path. The `v3_*` hybrid configs now use `full,sliding,csa,hca,sliding,csa,hca,full`, which keeps 6 of 24 layers global while making layer 23 `full` instead of `hca`.
 
-**D8 — Ablate full vs hybrid at 2K before spending the main budget.** `configs/ablate_2k_full.yaml` and `configs/ablate_2k_hybrid.yaml` share data, token budget, optimizer, and warm-start checkpoint. If full attention wins at 2K, use full for the short-context base/CPT stages and reserve hybrid for 16K.
+**D8 — Ablate full vs hybrid at 2K before spending the main budget.** `configs/ablate_2k_full.yaml` and `configs/ablate_2k_hybrid.yaml` share data, token budget, optimizer, and warm-start checkpoint; the `*_compile_200m.yaml` variants extend the comparison to 200M sampled tokens. If full attention wins at 2K, use full for the short-context base/CPT stages and reserve hybrid for 16K.
 
 ---
 
