@@ -28,6 +28,18 @@ try:
         create_block_mask as _create_block_mask,
     )
     _HAS_FLEX = True
+    # flex_attention only emits its *fused* kernel under torch.compile; called raw it
+    # falls back to an unfused path that materializes the full O(T^2) score matrix
+    # (slower and hungrier than the eager mask it replaces). Our block-mask builder
+    # forces a graph break right before the call, so the surrounding model.compile
+    # does not recapture it -- pre-compile the op itself when Triton is available.
+    # Envs without Triton (e.g. Windows) keep the raw op: correctness is identical,
+    # only the fused speedup is unavailable there.
+    try:
+        import triton  # noqa: F401  (flex's fused kernel is generated via Triton)
+        _flex_attention_fn = torch.compile(_flex_attention_fn)
+    except Exception:
+        pass
 except Exception:  # torch < 2.5 (e.g. the base env's 2.4.1) has no flex_attention
     _flex_attention_fn = None
     _create_block_mask = None
