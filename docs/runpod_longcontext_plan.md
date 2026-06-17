@@ -18,6 +18,8 @@
 | Base init | **Warm-start from your 1B** | Load `runpod_sambhav_80m_v2_hybrid_1b/final.pt` as initialization (not resume); attention re-heals over the first chunk of training. |
 | Hybrid pattern | **final-global** | Use `full,sliding,csa,hca,sliding,csa,hca,full` so each 24-layer stack ends on a precise global layer while keeping 6 full layers total. |
 | Dynamic short conv | **optional QKV ablation only** | Use `configs/ablate_2k_hybrid_flex_dynconv*.yaml` after the full-vs-hybrid baseline; do not put it in the main v3 chain until it wins. |
+| Recurrent thinking | **optional fixed-step ablation only** | Use `configs/ablate_2k_hybrid_flex_think*.yaml` after the baseline; it may help hard prompts but must beat validation/throughput first. |
+| 100M model | **fresh optional run** | Use `configs/runpod_sambhav_100m_v1_hybrid_10b.yaml` only when the 10B-token dataset/compute budget is ready; keep 80M as baseline. |
 | `rope_theta` | **10000 for 2K stages → 500000 at 16K** | Heal the rotation fix first at the frequency the 1B was trained on; raise theta only at the context-extension stage. |
 | Base pretrain tokens | **+4B (≈5B effective)** | Warm-started from 1B; 4B more clean tokens fixes the under-training. |
 | Context-extension tokens | **~500M** on long books (PG19) | Extension needs *long* docs, not packed short ones. |
@@ -448,6 +450,32 @@ if __name__ == "__main__":
 - [ ] If the 50M run is stable and improves validation loss, extend to `configs/ablate_2k_hybrid_flex_dynconv_compile_200m.yaml`.
 - [ ] Compare val loss, tok/s, VRAM, and passkey recall against the matching non-dynamic-conv Flex run at the same sampled-token budget.
 
+### Optional Task 0.7c — Recurrent thinking ablation
+
+**Files:** `src/model.py`, `configs/ablate_2k_hybrid_flex_think*.yaml`
+
+- [ ] Run the same baseline first: `python train.py --config configs/ablate_2k_hybrid_flex.yaml --resume auto --logs`
+- [ ] Run the matched fixed-step recurrent-thinking smoke: `python train.py --config configs/ablate_2k_hybrid_flex_think.yaml --resume auto --logs`
+- [ ] If the 50M run is stable and improves validation loss or passkey/reasoning behavior without too much tok/s loss, extend to `configs/ablate_2k_hybrid_flex_think_compile_200m.yaml`.
+- [ ] Do not combine recurrent thinking with dynamic conv until each one wins separately.
+
+### Task 0.7d — Research logging outputs
+
+- [ ] Every `--logs` run writes terminal output to `out/<run>/logs/train_*.log` or `out/<run>/logs/sft_*.log`.
+- [ ] LM/CPT and SFT runs append structured metrics to `out/<run>/metrics.jsonl`.
+- [ ] For ablations, compare `val_loss`, `tokens_per_second`, `grad_norm`, memory fields, and LM/CPT `module_grad_norms`.
+- [ ] Treat exploding `grad_norm`, constant near-zero module grad norms, or large tok/s loss as reasons to reject an experimental module even if a short sample looks better.
+
+### Optional Task 0.7e — 100M fresh run
+
+**Files:** `configs/runpod_sambhav_100m_v1_hybrid_10b.yaml`
+
+- [ ] Use this only after the 80M path is stable; it is not a replacement for the current baseline.
+- [ ] This is a fresh `30x512` model (~98.7M params) and does not warm-start from the 80M checkpoint because tensor shapes differ.
+- [ ] Run: `python train.py --config configs/runpod_sambhav_100m_v1_hybrid_10b.yaml --info`
+- [ ] Train with logs: `nohup python train.py --config configs/runpod_sambhav_100m_v1_hybrid_10b.yaml --resume auto --logs &`
+- [ ] Compare against 80M by equal sampled tokens first; do not wait for all 10B tokens before checking whether the larger model is learning efficiently.
+
 ### Task 0.8 — Commit and push
 
 - [ ] Commit the fix + new files:
@@ -639,7 +667,10 @@ Total ≈ 25–45 GPU-hours. On community 4090/L40S pricing that's roughly **$15
 5. **Hybrid attention quality at 2K.** Always-on compressed layers may cost quality on short context. Mitigation: run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml` before committing the main 2K budget.
 6. **Hybrid `torch.compile` is partial.** Full attention compiles cleanly, while `csa`/`hca` still use dynamic masks/block summaries and intentionally run eager under `torch.compile`. The opt-in FlexAttention path covers `sliding` only, and the code falls back to eager sliding unless the fused Triton-compiled FlexAttention path is available.
 7. **Dynamic short convolution memory/throughput.** The current implementation is plain PyTorch and materializes generated filters/windows. Mitigation: keep it to the 2K ablation configs, start with `max_micro_batch: 12`, and only raise the cap after a GPU smoke.
-8. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
+8. **Recurrent thinking can weaken the model if overused.** Extra fixed thinking steps add parameters and compute. Mitigation: zero-init the branch for warm-start safety, test it as an ablation, and keep it off unless it improves validation and behavior.
+9. **Ablation selection by samples alone is unreliable.** Nice generations can hide worse training dynamics. Mitigation: keep `out/<run>/metrics.jsonl`, compare validation loss/tok/s/grad norms, then sample from the best checkpoints only after the metrics agree.
+10. **100M can be worse if undertrained.** The larger config starts from scratch and needs more tokens/time than the stable 80M checkpoint. Mitigation: compare at equal token budgets, watch `metrics.jsonl`, and stop early if validation loss or tok/s does not justify the extra compute.
+11. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
 
 ---
 

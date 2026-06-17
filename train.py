@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -10,6 +12,30 @@ from src.config import load_yaml
 from src.data import PackedMemmapDataset
 from src.model import GPT, ModelConfig
 from src.trainer import Trainer
+
+
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data: str) -> None:
+        for stream in self.streams:
+            stream.write(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
+def setup_logs(out_dir: str, stem: str) -> Path:
+    logs_dir = Path(out_dir) / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    handle = log_path.open("a", encoding="utf-8", buffering=1)
+    sys.stdout = Tee(sys.stdout, handle)
+    sys.stderr = Tee(sys.stderr, handle)
+    print(f"Logging to {log_path}")
+    return log_path
 
 
 def get_train_limit(cfg):
@@ -60,6 +86,12 @@ def print_info(cfg, resume_override=None) -> None:
             "Dynamic conv: "
             f"qkv=true, kernel={model_config.dynamic_conv_kernel_size}, "
             f"rank={model_config.dynamic_conv_rank}, init_scale={model_config.dynamic_conv_init_scale}"
+        )
+    if model_config.recurrent_thinking:
+        print(
+            "Recurrent thinking: "
+            f"steps={model_config.recurrent_thinking_steps}, "
+            f"init_scale={model_config.recurrent_thinking_init_scale}"
         )
     print(f"Vocab size: {model_config.vocab_size:,}")
     print(f"Dataset tokens: train={train_tokens:,} | val={val_tokens:,} | total={train_tokens + val_tokens:,}")
@@ -129,9 +161,12 @@ def main():
     parser.add_argument("--max-vram-fraction", "--max_vram_fraction", dest="max_vram_fraction", type=float, default=None, help="Pick the largest micro-batch under this fraction of total GPU VRAM")
     parser.add_argument("--max-micro-batch", "--max_micro_batch", dest="max_micro_batch", type=int, default=None, help="Upper bound for auto micro-batch search")
     parser.add_argument("--auto-find-batch-on-resume", "--auto_find_batch_on_resume", dest="auto_find_batch_on_resume", action="store_true", help="Re-run the auto batch finder even when resuming")
+    parser.add_argument("--logs", action="store_true", help="Tee stdout/stderr to out_dir/logs/train_*.log")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
+    if args.logs:
+        setup_logs(cfg["out_dir"], "train")
     if args.max_steps is not None:
         cfg.setdefault("train", {})["max_steps"] = args.max_steps
     if args.max_tokens is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import json
 import signal
 import time
 from dataclasses import asdict, dataclass
@@ -89,6 +90,9 @@ class Trainer:
         except TypeError:
             self.scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
         self.optimizer = self.configure_optimizer()
+        self.metrics_path = self.out_dir / "metrics.jsonl"
+        self.last_grad_norm: Optional[float] = None
+        self.last_module_grad_norms: Dict[str, float] = {}
 
         self.start_time = time.time()
         self.last_save_time = time.time()
@@ -108,6 +112,12 @@ class Trainer:
                 "Dynamic conv: "
                 f"qkv=true, kernel={self.model_cfg.dynamic_conv_kernel_size}, "
                 f"rank={self.model_cfg.dynamic_conv_rank}, init_scale={self.model_cfg.dynamic_conv_init_scale}"
+            )
+        if self.model_cfg.recurrent_thinking:
+            print(
+                "Recurrent thinking: "
+                f"steps={self.model_cfg.recurrent_thinking_steps}, "
+                f"init_scale={self.model_cfg.recurrent_thinking_init_scale}"
             )
         print(
             f"Dataset tokens: train={self.dataset.train_tokens:,} | "
@@ -237,6 +247,39 @@ class Trainer:
         for group in self.optimizer.param_groups:
             group["lr"] = lr
 
+    def grad_norm(self, parameters) -> float:
+        total_sq = 0.0
+        for param in parameters:
+            if param.grad is None:
+                continue
+            grad = param.grad.detach()
+            total_sq += float(grad.float().pow(2).sum().cpu())
+        return math.sqrt(total_sq)
+
+    def module_grad_norms(self) -> Dict[str, float]:
+        groups = {
+            "dynamic_conv": [],
+            "thinker": [],
+        }
+        for name, param in self.model.named_parameters():
+            if param.grad is None:
+                continue
+            clean_name = name.removeprefix("_orig_mod.")
+            if ".q_dyn_conv." in clean_name or ".k_dyn_conv." in clean_name or ".v_dyn_conv." in clean_name:
+                groups["dynamic_conv"].append(param)
+            elif clean_name.startswith("thinker."):
+                groups["thinker"].append(param)
+        return {
+            key: self.grad_norm(params)
+            for key, params in groups.items()
+            if params
+        }
+
+    def write_metrics(self, record: Dict[str, Any]) -> None:
+        record = {"time": time.time(), **record}
+        with self.metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
     def checkpoint_model(self) -> torch.nn.Module:
         return getattr(self.model, "_orig_mod", self.model)
 
@@ -258,11 +301,18 @@ class Trainer:
     def is_dynamic_conv_key(self, key: str) -> bool:
         return any(part in key for part in (".q_dyn_conv.", ".k_dyn_conv.", ".v_dyn_conv."))
 
+    def is_recurrent_thinking_key(self, key: str) -> bool:
+        return key.startswith("thinker.")
+
     def load_warm_start_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> None:
         missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
         allowed_missing = [
             key for key in missing
-            if self.model_cfg.dynamic_conv_qkv and self.is_dynamic_conv_key(key)
+            if (
+                self.model_cfg.dynamic_conv_qkv and self.is_dynamic_conv_key(key)
+            ) or (
+                self.model_cfg.recurrent_thinking and self.is_recurrent_thinking_key(key)
+            )
         ]
         disallowed_missing = [key for key in missing if key not in allowed_missing]
         if disallowed_missing or unexpected:
@@ -274,8 +324,8 @@ class Trainer:
             raise RuntimeError("Warm-start checkpoint is incompatible: " + "; ".join(details))
         if allowed_missing:
             print(
-                "Warm-start checkpoint has no dynamic-conv weights; "
-                f"initialized {len(allowed_missing)} new dynamic-conv tensors from config."
+                "Warm-start checkpoint is missing additive module weights; "
+                f"initialized {len(allowed_missing)} new tensors from config."
             )
 
     def try_resume(self, resume_value: str) -> bool:
@@ -519,10 +569,13 @@ class Trainer:
                 self.scaler.scale(loss).backward()
             else:
                 loss.backward()
-        if float(self.cfg["train"].get("grad_clip", 0.0)) > 0:
-            if self.scaler.is_enabled():
-                self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), float(self.cfg["train"].get("grad_clip", 1.0)))
+        grad_clip = float(self.cfg["train"].get("grad_clip", 0.0))
+        if self.scaler.is_enabled():
+            self.scaler.unscale_(self.optimizer)
+        self.last_grad_norm = self.grad_norm(self.model.parameters())
+        self.last_module_grad_norms = self.module_grad_norms()
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
         lr = self.get_lr()
         self.set_lr(lr)
         if self.scaler.is_enabled():
@@ -599,13 +652,36 @@ class Trainer:
                         progress = f"step {self.state.step:,} | tokens {self.state.tokens_seen:,}/{self.max_tokens:,}"
                     print(
                         f"{progress} | loss {loss:.4f} | lr {lr:.2e} | mb {self.state.micro_batch_size} | "
-                        f"accum {self.state.grad_accum_steps} | tok/s {tok_s:.0f} | {self.monitor.short()}"
+                        f"accum {self.state.grad_accum_steps} | grad {self.last_grad_norm:.2f} | "
+                        f"tok/s {tok_s:.0f} | {self.monitor.short()}"
                     )
+                    mem = self.monitor.stats()
+                    self.write_metrics({
+                        "event": "train",
+                        "step": self.state.step,
+                        "tokens_seen": self.state.tokens_seen,
+                        "loss": loss,
+                        "lr": lr,
+                        "micro_batch": self.state.micro_batch_size,
+                        "grad_accum": self.state.grad_accum_steps,
+                        "tokens_per_second": tok_s,
+                        "grad_norm": self.last_grad_norm,
+                        "module_grad_norms": self.last_module_grad_norms,
+                        "ram_used_gb": mem.ram_used_gb,
+                        "vram_allocated_gb": mem.vram_allocated_gb,
+                        "vram_reserved_gb": mem.vram_reserved_gb,
+                    })
 
                 if self.state.tokens_seen - self.state.last_eval_tokens >= eval_interval_tokens:
                     val_loss = self.evaluate()
                     self.state.last_eval_tokens = self.state.tokens_seen
                     print(f"VAL | tokens {self.state.tokens_seen:,} | val_loss {val_loss:.4f}")
+                    self.write_metrics({
+                        "event": "eval",
+                        "step": self.state.step,
+                        "tokens_seen": self.state.tokens_seen,
+                        "val_loss": val_loss,
+                    })
                     if val_loss < self.state.best_val_loss:
                         self.state.best_val_loss = val_loss
                         self.save("best.pt")

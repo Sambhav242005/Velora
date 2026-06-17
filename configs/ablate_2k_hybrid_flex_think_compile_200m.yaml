@@ -1,6 +1,6 @@
-project_name: ablate-2k-hybrid-flex-dynconv
+project_name: ablate-2k-hybrid-flex-think-compile-200m
 seed: 1337
-out_dir: out/ablate_2k_hybrid_flex_dynconv
+out_dir: out/ablate_2k_hybrid_flex_think_compile_200m
 
 data:
   data_dir: data/fineweb_processed_16k_150m
@@ -26,14 +26,13 @@ model:
   hca_local_window: 512
   rope_theta: 10000.0
   use_flex_attention: true
-  dynamic_conv_qkv: true
-  dynamic_conv_kernel_size: 4
-  dynamic_conv_rank: 16
-  dynamic_conv_init_scale: 0.0
+  recurrent_thinking: true
+  recurrent_thinking_steps: 2
+  recurrent_thinking_init_scale: 0.0
 
 train:
   base_checkpoint: out/runpod_sambhav_80m_v2_hybrid_1b/final.pt
-  max_tokens: 50_000_000
+  max_tokens: 200_000_000
   dtype: bf16
   compile: true
   learning_rate: 0.0002
@@ -45,14 +44,14 @@ train:
   grad_clip: 1.0
   target_tokens_per_update: 131072
   log_interval: 20
-  eval_every_tokens: 5_000_000
-  save_every_tokens: 25_000_000
+  eval_every_tokens: 10_000_000
+  save_every_tokens: 50_000_000
   save_every_minutes: 20
 
 batch:
   auto_find: true
   start_micro_batch: 1
-  max_micro_batch: 12  # dynamic conv materializes generated filters/windows in eager PyTorch; raise only after a GPU smoke.
+  max_micro_batch: 20
   reduce_on_oom: true
   increase_if_safe: true
   increase_every_steps: 200

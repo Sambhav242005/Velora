@@ -29,7 +29,7 @@ model:
   dynamic_conv_qkv: true
   dynamic_conv_kernel_size: 4
   dynamic_conv_rank: 16
-  dynamic_conv_init_scale: 0.001
+  dynamic_conv_init_scale: 0.0
 
 train:
   base_checkpoint: out/runpod_sambhav_80m_v2_hybrid_1b/final.pt

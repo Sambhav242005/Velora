@@ -54,6 +54,8 @@ Severity: **CRITICAL** (breaks correctness) · **HIGH** (blocks a stated goal) �
 | B14 | Opt-in FlexAttention sliding path (fused kernel, removes O(T²) for sliding layers) | **PERF** | `src/model.py`, `configs/ablate_2k_hybrid_flex.yaml` | ✅ Done (sliding); csa/hca pending |
 | B15 | Validation triggered `torch.compile` recompile on `grad_mode` switch | **PERF/LOG** | `src/trainer.py` `evaluate` | ✅ Fixed |
 | B16 | QKV dynamic short convolution ablation path | **EXPERIMENT** | `src/model.py`, `configs/ablate_2k_hybrid_flex_dynconv*.yaml` | ✅ Implemented; needs GPU ablation |
+| B17 | Recurrent latent thinking loop ablation path | **EXPERIMENT** | `src/model.py`, `configs/ablate_2k_hybrid_flex_think*.yaml` | ✅ Implemented; needs GPU ablation |
+| B18 | Persisted logs + gradient metrics for research ablations | **OBSERVABILITY** | `train.py`, `train_sft.py`, `src/trainer.py` | ✅ Implemented |
 
 ### B1 — RoPE convention mismatch (CRITICAL) ✅ FIXED
 **What:** `rotate_half` used the **interleaved** (even/odd) convention, while the `cos`/`sin` cache was built with `torch.cat((freqs, freqs))`, the **half-split** convention. Mixing the two means each (even, odd) dimension pair is rotated by *two different frequencies* — so it is not a rotation, and `q·k` no longer depends only on relative position `(m − n)`. RoPE's defining property was broken.
@@ -176,11 +178,27 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 ### B16 — QKV dynamic short convolution ablation path (EXPERIMENT) ✅ IMPLEMENTED
 **What:** Added an opt-in dynamic short convolution branch on Q/K/V before RoPE, matching the paper's lowest-risk Transformer placement. The filter generator is conditioned on the post-attention-norm activations already passed into `CausalSelfAttention`.
 
-**Implementation:** `ModelConfig.dynamic_conv_qkv` defaults to `False`, so existing configs/checkpoints are unchanged. When enabled, each attention layer applies a causal width-`dynamic_conv_kernel_size` low-rank dynamic convolution to Q, K, and V with a small initialization scale. `Trainer.try_warm_start` now allows only the new dynamic-conv tensors to be missing from an older base checkpoint; resume remains strict.
+**Implementation:** `ModelConfig.dynamic_conv_qkv` defaults to `False`, so existing configs/checkpoints are unchanged. When enabled, each attention layer applies a causal width-`dynamic_conv_kernel_size` low-rank dynamic convolution to Q, K, and V. The ablation configs use `dynamic_conv_init_scale: 0.0`, making the branch an exact no-op at warm start while still allowing the output projection to learn. `Trainer.try_warm_start` now allows only the new dynamic-conv tensors to be missing from an older base checkpoint; resume remains strict.
 
 **Ablation configs:** `configs/ablate_2k_hybrid_flex_dynconv.yaml` (50M smoke) and `configs/ablate_2k_hybrid_flex_dynconv_compile_200m.yaml` (200M comparison). Both use the current hybrid+Flex baseline settings and cap `max_micro_batch` conservatively because the PyTorch implementation materializes generated filters/windows.
 
 **Scope:** this is an experiment, not the default v3 path. Keep the existing full-vs-hybrid ablation first; then compare dynamic-conv vs the matching hybrid+Flex baseline at equal sampled tokens.
+
+### B17 — Recurrent latent thinking loop ablation path (EXPERIMENT) ✅ IMPLEMENTED
+**What:** Added an opt-in recurrent refinement module after the Transformer blocks and before the final norm/head. It gives each token representation multiple causal "ponder" passes using its own state plus a cumulative previous/current-token context.
+
+**Implementation:** `ModelConfig.recurrent_thinking` defaults to `False`, so existing configs/checkpoints are unchanged. When enabled, `RecurrentThinking` runs `recurrent_thinking_steps` fixed refinement passes. Its output projection is zero-initialized by default (`recurrent_thinking_init_scale: 0.0`), making warm-started models initially identical to the base model while the new module learns.
+
+**Ablation configs:** `configs/ablate_2k_hybrid_flex_think.yaml` (50M smoke) and `configs/ablate_2k_hybrid_flex_think_compile_200m.yaml` (200M comparison). Test it separately from dynamic conv first; combining both before each wins makes attribution impossible.
+
+**Hallucination scope:** this can help the model revise internal representations before answering, but it does not guarantee truth. Factual hallucination still needs retrieval, context-grounded SFT, abstention examples, and evaluation where unsupported questions must be refused.
+
+### B18 — Persisted logs + gradient metrics for research ablations (OBSERVABILITY) ✅ IMPLEMENTED
+**What:** The docs already recommended `--logs`, but the CLI did not expose that flag. Added tee logging and structured metrics so ablation runs can be analyzed after SSH disconnects or RunPod preemption.
+
+**Implementation:** `train.py --logs` writes a timestamped `out/<run>/logs/train_*.log`; `train_sft.py --logs` writes `out/<run>/logs/sft_*.log`. LM/CPT and SFT trainers append structured records to `out/<run>/metrics.jsonl` with loss, LR, tokens/sec, memory, and global gradient norm. LM/CPT also records additive-module gradient norms for `dynamic_conv` and `thinker` when those modules exist.
+
+**Use:** Compare baseline vs dynamic-conv vs recurrent-thinking runs by `val_loss`, `tokens_per_second`, `grad_norm`, module grad norms, and memory. A module with near-zero gradients after warmup is not learning; a module with exploding gradients or persistent clipping is destabilizing the run.
 
 > **Process note (not a code bug):** the external paper at `arxiv.org/pdf/2605.06554` ("Lighthouse Attention", Nous Research) was assessed and found **out of scope** — its speedups apply only at 256K–1M context on datacenter GPUs, whereas this project runs ≤16K on a single GPU. Bookmark for a future long-context push, not now.
 
@@ -200,6 +218,8 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | Hybrid compile graph-break mitigation | `src/model.py` | ✅ Dynamo eager-backend compile smoke |
 | 2K full-vs-hybrid ablation configs | `configs/ablate_2k_full*.yaml`, `configs/ablate_2k_hybrid*.yaml` | ✅ 50M + 200M configs build 80.6M model |
 | QKV dynamic short convolution ablation | `src/model.py`, `configs/ablate_2k_hybrid_flex_dynconv*.yaml` | ✅ import, causal check, tiny forward/backward |
+| Recurrent latent thinking ablation | `src/model.py`, `configs/ablate_2k_hybrid_flex_think*.yaml` | ✅ import, causal check, tiny forward/backward |
+| Persisted logs + JSONL metrics | `train.py`, `train_sft.py`, `src/trainer.py` | ✅ CLI parse + trainer smoke |
 | Long-context eval (GSM8K + passkey + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |
 | RunPod runbook | `docs/runpod_longcontext_plan.md` | — |
@@ -226,7 +246,11 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 
 **D8 — Ablate full vs hybrid at 2K before spending the main budget.** `configs/ablate_2k_full.yaml` and `configs/ablate_2k_hybrid.yaml` share data, token budget, optimizer, and warm-start checkpoint; the `*_compile_200m.yaml` variants extend the comparison to 200M sampled tokens. If full attention wins at 2K, use full for the short-context base/CPT stages and reserve hybrid for 16K.
 
-**D9 — Dynamic short convolution is opt-in and QKV-only first.** The paper also reports gains from placing dynamic convolutions after every linear layer, but that is too invasive for the first repo experiment. The first test only adds Q/K/V dynamic short convolutions before RoPE, uses tiny initialization for warm-start safety, and keeps configs separate so quality/throughput can be compared cleanly.
+**D9 — Dynamic short convolution is opt-in and QKV-only first.** The paper also reports gains from placing dynamic convolutions after every linear layer, but that is too invasive for the first repo experiment. The first test only adds Q/K/V dynamic short convolutions before RoPE, uses zero-init for warm-start safety, and keeps configs separate so quality/throughput can be compared cleanly.
+
+**D10 — Recurrent thinking is opt-in and fixed-step first.** A learned halt/retrieve/answer controller is the goal, but it needs separate supervision. The first implementation uses fixed causal refinement steps with zero-initialized output for warm-start safety; only add adaptive halting after the fixed-step ablation improves validation and behavior.
+
+**D11 — Keep 80M as the stable baseline; add 100M only as a fresh run.** The 80M checkpoint is stable and should remain the comparison baseline. A ~100M model is added as `30x512` (~98.7M params) because it preserves the proven width/head shape and only adds depth. It cannot warm-start from the 80M checkpoint without shape-mismatch surgery, so the 100M config starts from scratch and needs its own token budget.
 
 ---
 
@@ -281,6 +305,9 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 - [x] **B5 (.venv)** — not an issue; already gitignored (re-checked 2026-06-05).
 - [ ] **B7 ablation** — run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml`.
 - [ ] **B16 ablation** — run `configs/ablate_2k_hybrid_flex.yaml` vs `configs/ablate_2k_hybrid_flex_dynconv.yaml`; if stable, extend with the 200M configs.
+- [ ] **B17 ablation** — run `configs/ablate_2k_hybrid_flex.yaml` vs `configs/ablate_2k_hybrid_flex_think.yaml`; if stable, extend with the 200M configs.
+- [ ] **B18 analysis** — archive `out/<run>/logs/*.log` and `out/<run>/metrics.jsonl` for every ablation before deleting checkpoints.
+- [ ] **100M run** — train `configs/runpod_sambhav_100m_v1_hybrid_10b.yaml` only if the 80M recipe is stable and the 10B-token dataset is ready.
 - [x] **B9 warm-start loader** — fixed in `src/trainer.py`; verify with `train.py --info` before launching.
 - [ ] Decide whether to keep the 16K stage (D5) or skip it for a faster chat model.
 - [ ] Watch for the warm-start **loss bump** in Phase 1; fall back to fresh run if it doesn't recover (~500M tok).
@@ -290,9 +317,10 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 ## 8. File inventory / changelog
 
 **Modified**
-- `src/model.py` — RoPE fix (B1), configurable `rope_theta`, and opt-in QKV dynamic short convolution (B16).
-- `src/trainer.py` — LM/CPT `train.base_checkpoint` warm-start loader (B9), including additive dynamic-conv warm-start compatibility.
-- `train.py` — `--info` now reports resume vs base-checkpoint warm-start and dynamic-conv settings.
+- `src/model.py` — RoPE fix (B1), configurable `rope_theta`, opt-in QKV dynamic short convolution (B16), and opt-in recurrent latent thinking (B17).
+- `src/trainer.py` — LM/CPT `train.base_checkpoint` warm-start loader (B9), including additive dynamic-conv/recurrent-thinking warm-start compatibility.
+- `train.py` — `--info` now reports resume vs base-checkpoint warm-start and additive module settings; `--logs` tees output to `out/<run>/logs/`.
+- `train_sft.py` — `--logs` tee support plus SFT `metrics.jsonl` records.
 - `configs/v3_*.yaml` — hybrid pattern changed to end each 24-layer stack on a `full` layer.
 
 **Created (configs)**
@@ -300,6 +328,9 @@ Rough total: **~25–45 GPU-hours (~$15–45)** on community GPUs; the base heal
 - `configs/ablate_2k_hybrid.yaml` — matched 50M-token 2K hybrid comparison run.
 - `configs/ablate_2k_hybrid_flex_dynconv.yaml` — 50M-token QKV dynamic-conv comparison run.
 - `configs/ablate_2k_hybrid_flex_dynconv_compile_200m.yaml` — 200M-token QKV dynamic-conv comparison run.
+- `configs/ablate_2k_hybrid_flex_think.yaml` — 50M-token recurrent-thinking comparison run.
+- `configs/ablate_2k_hybrid_flex_think_compile_200m.yaml` — 200M-token recurrent-thinking comparison run.
+- `configs/runpod_sambhav_100m_v1_hybrid_10b.yaml` — fresh ~100M hybrid run for a 10B-token budget.
 - `configs/v3_base_2k.yaml` — warm-start heal + base pretrain (2K, θ=10000, +4B, base_checkpoint = 1B).
 - `configs/v3_cpt_math_2k.yaml` — math CPT (2K, θ=10000).
 - `configs/v3_cpt_web_2k.yaml` — web CPT (2K, θ=10000).

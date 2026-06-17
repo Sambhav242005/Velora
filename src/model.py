@@ -76,8 +76,12 @@ class ModelConfig:
     dynamic_conv_qkv: bool = False
     dynamic_conv_kernel_size: int = 4
     dynamic_conv_rank: int = 16
-    dynamic_conv_init_scale: float = 1e-3
+    dynamic_conv_init_scale: float = 0.0
     dynamic_conv_bias: bool = True
+    recurrent_thinking: bool = False
+    recurrent_thinking_steps: int = 2
+    recurrent_thinking_init_scale: float = 0.0
+    recurrent_thinking_bias: bool = True
 
 
 class RMSNorm(nn.Module):
@@ -153,6 +157,64 @@ class DynamicShortConvolution(nn.Module):
         windows = windows.flip(dims=(2,))
         filters = self.filter_up(self.filter_down(condition)).view(B, T, self.kernel_size, C)
         return (filters * windows).sum(dim=2)
+
+
+class RecurrentThinking(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        steps: int,
+        bias: bool = True,
+        init_scale: float = 0.0,
+    ):
+        super().__init__()
+        if steps < 1:
+            raise ValueError("recurrent_thinking_steps must be >= 1 when recurrent_thinking is enabled.")
+        if init_scale < 0:
+            raise ValueError("recurrent_thinking_init_scale must be >= 0.")
+        self.steps = steps
+        self.init_scale = init_scale
+        self.norm = RMSNorm(dim)
+        self.state_proj = nn.Linear(dim, dim, bias=bias)
+        self.context_proj = nn.Linear(dim, dim, bias=bias)
+        self.step_embeddings = nn.Parameter(torch.zeros(steps, dim))
+        self.out_proj = nn.Linear(dim, dim, bias=bias)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.state_proj.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.context_proj.weight, mean=0.0, std=0.02)
+        if self.state_proj.bias is not None:
+            nn.init.zeros_(self.state_proj.bias)
+        if self.context_proj.bias is not None:
+            nn.init.zeros_(self.context_proj.bias)
+        if self.init_scale == 0.0:
+            nn.init.zeros_(self.step_embeddings)
+            nn.init.zeros_(self.out_proj.weight)
+        else:
+            nn.init.normal_(self.step_embeddings, mean=0.0, std=float(self.init_scale))
+            nn.init.normal_(
+                self.out_proj.weight,
+                mean=0.0,
+                std=float(self.init_scale) / max(1, self.out_proj.in_features) ** 0.5,
+            )
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Recurrent latent refinement with causal context only. Each token can use
+        # its own state and a cumulative summary of previous/current positions.
+        positions = torch.arange(1, x.size(1) + 1, device=x.device, dtype=x.dtype).view(1, -1, 1)
+        for step in range(self.steps):
+            h = self.norm(x)
+            context = torch.cumsum(h, dim=1) / positions
+            update = torch.tanh(
+                self.state_proj(h)
+                + self.context_proj(context)
+                + self.step_embeddings[step].view(1, 1, -1).to(dtype=x.dtype)
+            )
+            x = x + self.out_proj(update)
+        return x
 
 
 class CausalSelfAttention(nn.Module):
@@ -432,6 +494,16 @@ class GPT(nn.Module):
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layer)])
+        self.thinker = (
+            RecurrentThinking(
+                config.n_embd,
+                int(config.recurrent_thinking_steps),
+                bias=bool(config.recurrent_thinking_bias),
+                init_scale=float(config.recurrent_thinking_init_scale),
+            )
+            if config.recurrent_thinking
+            else None
+        )
         self.norm = RMSNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.weight = self.tok_embeddings.weight  # tied embeddings
@@ -442,6 +514,8 @@ class GPT(nn.Module):
                 nn.init.normal_(param, mean=0.0, std=0.02 / (2 * config.n_layer) ** 0.5)
         for module in self.modules():
             if isinstance(module, DynamicShortConvolution):
+                module.reset_parameters()
+            elif isinstance(module, RecurrentThinking):
                 module.reset_parameters()
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -463,6 +537,8 @@ class GPT(nn.Module):
                 x = checkpoint(block, x, use_reentrant=False)
             else:
                 x = block(x)
+        if self.thinker is not None:
+            x = self.thinker(x)
         x = self.norm(x)
         logits = self.lm_head(x)
 

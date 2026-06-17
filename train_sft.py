@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import signal
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,6 +17,30 @@ from src.config import load_yaml
 from src.memory import MemoryMonitor, cleanup_cuda, gb
 from src.model import GPT, ModelConfig
 from src.sft_data import SFTArrayDataset
+
+
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data: str) -> None:
+        for stream in self.streams:
+            stream.write(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
+def setup_logs(out_dir: str, stem: str) -> Path:
+    logs_dir = Path(out_dir) / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"{stem}_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    handle = log_path.open("a", encoding="utf-8", buffering=1)
+    sys.stdout = Tee(sys.stdout, handle)
+    sys.stderr = Tee(sys.stderr, handle)
+    print(f"Logging to {log_path}")
+    return log_path
 
 
 @dataclass
@@ -85,6 +111,8 @@ class SFTTrainer:
             self.model = self.model_from_checkpoint(base_ckpt).to(self.device)
 
         self.optimizer = self.configure_optimizer()
+        self.metrics_path = self.out_dir / "metrics.jsonl"
+        self.last_grad_norm: Optional[float] = None
         self.state = SFTState()
         self.state.micro_batch_size = int(self.batch_cfg.get("start_micro_batch", 1))
         self.state.grad_accum_steps = self.compute_grad_accum(self.state.micro_batch_size)
@@ -204,6 +232,19 @@ class SFTTrainer:
     def set_lr(self, lr: float) -> None:
         for group in self.optimizer.param_groups:
             group["lr"] = lr
+
+    def grad_norm(self) -> float:
+        total_sq = 0.0
+        for param in self.model.parameters():
+            if param.grad is None:
+                continue
+            total_sq += float(param.grad.detach().float().pow(2).sum().cpu())
+        return math.sqrt(total_sq)
+
+    def write_metrics(self, record: Dict[str, Any]) -> None:
+        record = {"time": time.time(), **record}
+        with self.metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     def vram_limit_gb(self) -> Optional[float]:
         if self.device.type != "cuda":
@@ -338,9 +379,10 @@ class SFTTrainer:
                 loss.backward()
 
         grad_clip = float(self.train_cfg.get("grad_clip", 1.0))
+        if self.scaler.is_enabled():
+            self.scaler.unscale_(self.optimizer)
+        self.last_grad_norm = self.grad_norm()
         if grad_clip > 0:
-            if self.scaler.is_enabled():
-                self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
 
         lr = self.get_lr()
@@ -394,13 +436,34 @@ class SFTTrainer:
                     print(
                         f"step {self.state.step:,}/{self.max_steps:,} | loss {loss:.4f} | lr {lr:.2e} | "
                         f"mb {self.state.micro_batch_size} | accum {self.state.grad_accum_steps} | "
-                        f"tok/s {tok_s:.0f} | {self.monitor.short()}"
+                        f"grad {self.last_grad_norm:.2f} | tok/s {tok_s:.0f} | {self.monitor.short()}"
                     )
+                    mem = self.monitor.stats()
+                    self.write_metrics({
+                        "event": "train",
+                        "step": self.state.step,
+                        "tokens_seen": self.state.tokens_seen,
+                        "loss": loss,
+                        "lr": lr,
+                        "micro_batch": self.state.micro_batch_size,
+                        "grad_accum": self.state.grad_accum_steps,
+                        "tokens_per_second": tok_s,
+                        "grad_norm": self.last_grad_norm,
+                        "ram_used_gb": mem.ram_used_gb,
+                        "vram_allocated_gb": mem.vram_allocated_gb,
+                        "vram_reserved_gb": mem.vram_reserved_gb,
+                    })
 
                 if self.state.step - self.state.last_eval_step >= eval_interval:
                     val_loss = self.evaluate()
                     self.state.last_eval_step = self.state.step
                     print(f"VAL | step {self.state.step:,} | val_loss {val_loss:.4f}")
+                    self.write_metrics({
+                        "event": "eval",
+                        "step": self.state.step,
+                        "tokens_seen": self.state.tokens_seen,
+                        "val_loss": val_loss,
+                    })
                     if val_loss < self.state.best_val_loss:
                         self.state.best_val_loss = val_loss
                         self.save("best.pt")
@@ -430,9 +493,12 @@ def main() -> None:
     parser.add_argument("--max-steps", "--max_steps", dest="max_steps", type=int, default=None)
     parser.add_argument("--max-vram-gb", "--max_vram_gb", dest="max_vram_gb", type=float, default=None)
     parser.add_argument("--max-micro-batch", "--max_micro_batch", dest="max_micro_batch", type=int, default=None)
+    parser.add_argument("--logs", action="store_true", help="Tee stdout/stderr to out_dir/logs/sft_*.log")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
+    if args.logs:
+        setup_logs(cfg["out_dir"], "sft")
     if args.max_steps is not None:
         cfg.setdefault("sft", {})["max_steps"] = args.max_steps
     if args.max_vram_gb is not None:
