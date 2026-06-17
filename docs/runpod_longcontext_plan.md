@@ -500,12 +500,12 @@ git clone -b v3-longcontext <your-repo-url> sambhav
 cd sambhav
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 huggingface-cli login   # needed for gated/streamed datasets
 ```
 
-- [ ] Confirm the GPU is visible: `python -c "import torch; print(torch.cuda.get_device_name(0))"`
+- [ ] Confirm the GPU is visible and dtype support is sane: `python scripts/check_gpu.py`
 - [ ] **Always run training under `nohup` + `--logs`** so a dropped SSH session doesn't kill the run, e.g. `nohup python train.py --config ... --resume auto --logs &` then `tail -f out/<run>/logs/*.log`.
 
 ---
