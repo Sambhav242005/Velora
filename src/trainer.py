@@ -103,6 +103,12 @@ class Trainer:
             f"sliding_window={self.model_cfg.sliding_window}, csa_block={self.model_cfg.csa_block_size}, "
             f"hca_block={self.model_cfg.hca_block_size}"
         )
+        if self.model_cfg.dynamic_conv_qkv:
+            print(
+                "Dynamic conv: "
+                f"qkv=true, kernel={self.model_cfg.dynamic_conv_kernel_size}, "
+                f"rank={self.model_cfg.dynamic_conv_rank}, init_scale={self.model_cfg.dynamic_conv_init_scale}"
+            )
         print(
             f"Dataset tokens: train={self.dataset.train_tokens:,} | "
             f"val={self.dataset.val_tokens:,} | total={self.dataset.train_tokens + self.dataset.val_tokens:,}"
@@ -249,6 +255,29 @@ class Trainer:
             }
         return state_dict
 
+    def is_dynamic_conv_key(self, key: str) -> bool:
+        return any(part in key for part in (".q_dyn_conv.", ".k_dyn_conv.", ".v_dyn_conv."))
+
+    def load_warm_start_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> None:
+        missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+        allowed_missing = [
+            key for key in missing
+            if self.model_cfg.dynamic_conv_qkv and self.is_dynamic_conv_key(key)
+        ]
+        disallowed_missing = [key for key in missing if key not in allowed_missing]
+        if disallowed_missing or unexpected:
+            details = []
+            if disallowed_missing:
+                details.append(f"missing={disallowed_missing[:8]}")
+            if unexpected:
+                details.append(f"unexpected={unexpected[:8]}")
+            raise RuntimeError("Warm-start checkpoint is incompatible: " + "; ".join(details))
+        if allowed_missing:
+            print(
+                "Warm-start checkpoint has no dynamic-conv weights; "
+                f"initialized {len(allowed_missing)} new dynamic-conv tensors from config."
+            )
+
     def try_resume(self, resume_value: str) -> bool:
         candidates = resume_checkpoint_candidates(self.out_dir, resume_value)
         if not candidates:
@@ -302,7 +331,7 @@ class Trainer:
         print(f"Warm-starting weights from base checkpoint: {path}")
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        self.model.load_state_dict(self.normalize_checkpoint_state_dict(state_dict))
+        self.load_warm_start_state_dict(self.normalize_checkpoint_state_dict(state_dict))
         print("Loaded base checkpoint weights only; optimizer, scheduler, RNG, and data order start fresh.")
         return True
 

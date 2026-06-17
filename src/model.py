@@ -73,6 +73,11 @@ class ModelConfig:
     hca_local_window: int = 512
     rope_theta: float = 10000.0
     use_flex_attention: bool = False  # opt-in: route the `sliding` path through torch FlexAttention (needs torch>=2.5)
+    dynamic_conv_qkv: bool = False
+    dynamic_conv_kernel_size: int = 4
+    dynamic_conv_rank: int = 16
+    dynamic_conv_init_scale: float = 1e-3
+    dynamic_conv_bias: bool = True
 
 
 class RMSNorm(nn.Module):
@@ -98,6 +103,58 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     return (x * cos) + (rotate_half(x) * sin)
 
 
+class DynamicShortConvolution(nn.Module):
+    def __init__(
+        self,
+        source_dim: int,
+        target_dim: int,
+        kernel_size: int,
+        rank: int,
+        bias: bool = True,
+        init_scale: float = 1e-3,
+    ):
+        super().__init__()
+        if kernel_size < 1:
+            raise ValueError("dynamic_conv_kernel_size must be >= 1.")
+        if rank < 1:
+            raise ValueError("dynamic_conv_rank must be >= 1.")
+        if init_scale < 0:
+            raise ValueError("dynamic_conv_init_scale must be >= 0.")
+        self.target_dim = target_dim
+        self.kernel_size = kernel_size
+        self.init_scale = init_scale
+        self.filter_down = nn.Linear(source_dim, rank, bias=bias)
+        self.filter_up = nn.Linear(rank, kernel_size * target_dim, bias=bias)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.filter_down.weight, mean=0.0, std=0.02)
+        if self.filter_down.bias is not None:
+            nn.init.zeros_(self.filter_down.bias)
+        if self.init_scale == 0.0:
+            nn.init.zeros_(self.filter_up.weight)
+        else:
+            nn.init.normal_(
+                self.filter_up.weight,
+                mean=0.0,
+                std=float(self.init_scale) / max(1, self.filter_down.out_features) ** 0.5,
+            )
+        if self.filter_up.bias is not None:
+            nn.init.zeros_(self.filter_up.bias)
+
+    def forward(self, values: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        # values: [B, T, target_dim], condition: [B, T, source_dim].
+        # Window order is [current, previous 1, previous 2, ...].
+        B, T, C = values.shape
+        if C != self.target_dim:
+            raise ValueError(f"Expected target dim {self.target_dim}, got {C}.")
+        padded = F.pad(values, (0, 0, self.kernel_size - 1, 0))
+        windows = padded.unfold(dimension=1, size=self.kernel_size, step=1).movedim(-1, 2)
+        windows = windows.flip(dims=(2,))
+        filters = self.filter_up(self.filter_down(condition)).view(B, T, self.kernel_size, C)
+        return (filters * windows).sum(dim=2)
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: ModelConfig, layer_idx: int):
         super().__init__()
@@ -116,6 +173,35 @@ class CausalSelfAttention(nn.Module):
         self.v_proj = nn.Linear(config.n_embd, config.n_kv_head * self.head_dim, bias=config.bias)
         self.o_proj = nn.Linear(config.n_head * self.head_dim, config.n_embd, bias=config.bias)
         self.resid_dropout = nn.Dropout(config.dropout)
+        self.dynamic_conv_qkv = bool(config.dynamic_conv_qkv)
+        if self.dynamic_conv_qkv:
+            kernel_size = int(config.dynamic_conv_kernel_size)
+            rank = int(config.dynamic_conv_rank)
+            init_scale = float(config.dynamic_conv_init_scale)
+            self.q_dyn_conv = DynamicShortConvolution(
+                config.n_embd,
+                config.n_head * self.head_dim,
+                kernel_size,
+                rank,
+                bias=bool(config.dynamic_conv_bias),
+                init_scale=init_scale,
+            )
+            self.k_dyn_conv = DynamicShortConvolution(
+                config.n_embd,
+                config.n_kv_head * self.head_dim,
+                kernel_size,
+                rank,
+                bias=bool(config.dynamic_conv_bias),
+                init_scale=init_scale,
+            )
+            self.v_dyn_conv = DynamicShortConvolution(
+                config.n_embd,
+                config.n_kv_head * self.head_dim,
+                kernel_size,
+                rank,
+                bias=bool(config.dynamic_conv_bias),
+                init_scale=init_scale,
+            )
 
         inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
@@ -259,9 +345,16 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.shape
-        q = self.q_proj(x).view(B, T, self.n_head, self.head_dim)
-        k = self.k_proj(x).view(B, T, self.n_kv_head, self.head_dim)
-        v = self.v_proj(x).view(B, T, self.n_kv_head, self.head_dim)
+        q_raw = self.q_proj(x)
+        k_raw = self.k_proj(x)
+        v_raw = self.v_proj(x)
+        if self.dynamic_conv_qkv:
+            q_raw = q_raw + self.q_dyn_conv(q_raw, x)
+            k_raw = k_raw + self.k_dyn_conv(k_raw, x)
+            v_raw = v_raw + self.v_dyn_conv(v_raw, x)
+        q = q_raw.view(B, T, self.n_head, self.head_dim)
+        k = k_raw.view(B, T, self.n_kv_head, self.head_dim)
+        v = v_raw.view(B, T, self.n_kv_head, self.head_dim)
 
         cos, sin = self._rope_cache(T, x.device, q.dtype)
         q = apply_rope(q, cos, sin)
@@ -347,6 +440,9 @@ class GPT(nn.Module):
         for name, param in self.named_parameters():
             if name.endswith("o_proj.weight") or name.endswith("w2.weight"):
                 nn.init.normal_(param, mean=0.0, std=0.02 / (2 * config.n_layer) ** 0.5)
+        for module in self.modules():
+            if isinstance(module, DynamicShortConvolution):
+                module.reset_parameters()
 
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):

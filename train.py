@@ -55,6 +55,12 @@ def print_info(cfg, resume_override=None) -> None:
         f"sliding_window={model_config.sliding_window}, csa_block={model_config.csa_block_size}, "
         f"hca_block={model_config.hca_block_size}"
     )
+    if model_config.dynamic_conv_qkv:
+        print(
+            "Dynamic conv: "
+            f"qkv=true, kernel={model_config.dynamic_conv_kernel_size}, "
+            f"rank={model_config.dynamic_conv_rank}, init_scale={model_config.dynamic_conv_init_scale}"
+        )
     print(f"Vocab size: {model_config.vocab_size:,}")
     print(f"Dataset tokens: train={train_tokens:,} | val={val_tokens:,} | total={train_tokens + val_tokens:,}")
     batch_cfg = cfg.get("batch", {})

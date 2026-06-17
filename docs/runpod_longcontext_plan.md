@@ -17,6 +17,7 @@
 | Target context | **16K** | Big jump from 2K, fits a 24–48 GB GPU without an attention rewrite. 32K+ needs the FlexAttention task (Phase 8, optional). |
 | Base init | **Warm-start from your 1B** | Load `runpod_sambhav_80m_v2_hybrid_1b/final.pt` as initialization (not resume); attention re-heals over the first chunk of training. |
 | Hybrid pattern | **final-global** | Use `full,sliding,csa,hca,sliding,csa,hca,full` so each 24-layer stack ends on a precise global layer while keeping 6 full layers total. |
+| Dynamic short conv | **optional QKV ablation only** | Use `configs/ablate_2k_hybrid_flex_dynconv*.yaml` after the full-vs-hybrid baseline; do not put it in the main v3 chain until it wins. |
 | `rope_theta` | **10000 for 2K stages → 500000 at 16K** | Heal the rotation fix first at the frequency the 1B was trained on; raise theta only at the context-extension stage. |
 | Base pretrain tokens | **+4B (≈5B effective)** | Warm-started from 1B; 4B more clean tokens fixes the under-training. |
 | Context-extension tokens | **~500M** on long books (PG19) | Extension needs *long* docs, not packed short ones. |
@@ -438,6 +439,15 @@ if __name__ == "__main__":
 
 - [ ] **Sanity check it parses:** `.venv/Scripts/python.exe -c "import ast; ast.parse(open('scripts/eval_longctx.py').read()); print('ok')"` → `ok`
 
+### Optional Task 0.7b — Dynamic short convolution ablation
+
+**Files:** `src/model.py`, `configs/ablate_2k_hybrid_flex_dynconv*.yaml`
+
+- [ ] Run the baseline first: `python train.py --config configs/ablate_2k_hybrid_flex.yaml --resume auto --logs`
+- [ ] Run the matched QKV dynamic-conv smoke: `python train.py --config configs/ablate_2k_hybrid_flex_dynconv.yaml --resume auto --logs`
+- [ ] If the 50M run is stable and improves validation loss, extend to `configs/ablate_2k_hybrid_flex_dynconv_compile_200m.yaml`.
+- [ ] Compare val loss, tok/s, VRAM, and passkey recall against the matching non-dynamic-conv Flex run at the same sampled-token budget.
+
 ### Task 0.8 — Commit and push
 
 - [ ] Commit the fix + new files:
@@ -581,7 +591,7 @@ python scripts/prepare_reasoning_mix.py \
 
 ```bash
 python scripts/eval_longctx.py --checkpoint out/v3_sft_reasoning/best.pt \
-  --tokenizer tokenizer_fineweb_16k/tokenizer.json --gsm8k 200
+  --tokenizer tokenizer_fineweb_16k/tokenizer.json --gsm8k 200 --passkey 20
 ```
 
 - [ ] Instruction smoke test:
@@ -628,7 +638,8 @@ Total ≈ 25–45 GPU-hours. On community 4090/L40S pricing that's roughly **$15
 4. **Spot/community preemption.** Mitigation: persistent `/workspace` volume + `--resume auto` (already wired) + `save_on_interrupt` — a preempted run resumes from `last.pt`/`interrupted.pt` automatically on restart.
 5. **Hybrid attention quality at 2K.** Always-on compressed layers may cost quality on short context. Mitigation: run `configs/ablate_2k_full.yaml` vs `configs/ablate_2k_hybrid.yaml` before committing the main 2K budget.
 6. **Hybrid `torch.compile` is partial.** Full attention compiles cleanly, while `csa`/`hca` still use dynamic masks/block summaries and intentionally run eager under `torch.compile`. The opt-in FlexAttention path covers `sliding` only, and the code falls back to eager sliding unless the fused Triton-compiled FlexAttention path is available.
-7. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
+7. **Dynamic short convolution memory/throughput.** The current implementation is plain PyTorch and materializes generated filters/windows. Mitigation: keep it to the 2K ablation configs, start with `max_micro_batch: 12`, and only raise the cap after a GPU smoke.
+8. **Dataset IDs/fields drift on HuggingFace.** If a `--text_field` is wrong, the prep script prints available fields and exits — re-run with the right field. Confirm `open-web-math`, `openbmb/Ultra-FineWeb`, and `pg19` access on first use.
 
 ---
 
