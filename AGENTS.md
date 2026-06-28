@@ -124,7 +124,7 @@ docs/            # PROJECT_NOTES.md (findings/bugs/decisions), runpod_longcontex
 **Scripts & data prep (`scripts/`)**
 - Follow the existing argparse pattern: explicit flags, `--overwrite`, a written `meta.json`, shard writers for token data. For a new dataset prefer `prepare_lm_hf.py` (LM) or `prepare_sft.py` (instruction) -- they auto-detect common field layouts.
 
-**Do not commit generated artifacts.** `out/` (checkpoints), `data/` (tokenized shards), `.venv/`, and `*.pt`/`*.npy`/`*.bin` are already covered by `.gitignore` -- keep them ignored; don't force-add them.
+**Do not commit generated artifacts.** `out/` (checkpoints), `data/` (tokenized shards), `hf_repo/` (export bundles), `hf_models/` (downloaded bundles), `.venv/`, and `*.pt`/`*.npy`/`*.bin` are already covered by `.gitignore` -- keep them ignored; don't force-add them.
 
 
 ## Portfolio Cover Asset
@@ -148,6 +148,7 @@ Rules:
 ## More context
 
 - `DEPLOYMENT.md` -- secrets, artifact storage (HF Hub), inference, and serving.
+- `TRAINING.md` -- concise setup, training, SFT, generation, RunPod, and HF publish commands.
 - `docs/PROJECT_NOTES.md` -- full findings, the bug register (B1-B8), and design decisions.
 - `docs/runpod_longcontext_plan.md` -- the end-to-end RunPod training runbook.
 

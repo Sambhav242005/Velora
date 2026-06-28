@@ -21,6 +21,7 @@ data/
 out/
 mlrunner_package/
 hf_repo/
+hf_models/
 *.pt
 *.pth
 *.safetensors
