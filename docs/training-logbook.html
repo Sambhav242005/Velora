@@ -1,0 +1,1188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Velora Training Logbook</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071014;
+      --bg-2: #0b171c;
+      --panel: #101d24;
+      --panel-2: #14252e;
+      --line: #243942;
+      --line-strong: #36515b;
+      --text: #e7f2f2;
+      --muted: #8fa5aa;
+      --soft: #5f777d;
+      --teal: #37d7bd;
+      --blue: #6aa5ff;
+      --amber: #f0b84b;
+      --red: #ff6b6b;
+      --green: #75df96;
+      --shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+      font-family: "Aptos", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(120deg, rgba(55, 215, 189, 0.08), transparent 28%),
+        linear-gradient(240deg, rgba(106, 165, 255, 0.1), transparent 30%),
+        radial-gradient(circle at 50% 0%, rgba(240, 184, 75, 0.1), transparent 34%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1500px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 56px);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 10px 0 0;
+      max-width: 780px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .run-id {
+      color: var(--teal);
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: rgba(16, 29, 36, 0.78);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 11px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chip strong {
+      color: var(--teal);
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .panel {
+      min-width: 0;
+      background: linear-gradient(180deg, rgba(20, 37, 46, 0.96), rgba(10, 21, 27, 0.96));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .side-panel,
+    .chart-panel,
+    .table-panel {
+      padding: 16px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      color: #d6e8e8;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .metric-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid rgba(54, 81, 91, 0.78);
+      background: rgba(6, 18, 23, 0.55);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .metric small {
+      display: block;
+      margin-top: 7px;
+      color: var(--soft);
+      font-size: 12px;
+    }
+
+    .metric.best-metric {
+      border-color: rgba(117, 223, 150, 0.8);
+      background: linear-gradient(180deg, rgba(117, 223, 150, 0.16), rgba(6, 18, 23, 0.58));
+      box-shadow: inset 0 0 0 1px rgba(117, 223, 150, 0.08);
+    }
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .toolbar-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .toolbar-controls select {
+      min-width: 150px;
+    }
+
+    select,
+    .button {
+      height: 36px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #0b171d;
+      color: var(--text);
+      padding: 0 12px;
+      font-size: 13px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .button:hover,
+    select:hover {
+      border-color: var(--teal);
+    }
+
+    .button.primary {
+      background: linear-gradient(135deg, rgba(55, 215, 189, 0.22), rgba(106, 165, 255, 0.18));
+      border-color: rgba(55, 215, 189, 0.8);
+    }
+
+    .chart-wrap {
+      position: relative;
+      height: 430px;
+      border: 1px solid rgba(54, 81, 91, 0.65);
+      border-radius: 8px;
+      background:
+        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+        rgba(5, 13, 17, 0.72);
+      background-size: 44px 44px;
+      overflow: hidden;
+      cursor: crosshair;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .chart-tooltip {
+      position: absolute;
+      z-index: 3;
+      width: 280px;
+      max-width: calc(100% - 24px);
+      border: 1px solid rgba(55, 215, 189, 0.5);
+      border-radius: 8px;
+      background: rgba(5, 13, 17, 0.95);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+      color: var(--text);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .chart-tooltip.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .tooltip-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid rgba(54, 81, 91, 0.65);
+      padding: 10px 11px 8px;
+      color: #d6e8e8;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .tooltip-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 5px rgba(55, 215, 189, 0.13);
+      flex: 0 0 auto;
+    }
+
+    .tooltip-rows {
+      display: grid;
+      gap: 5px;
+      padding: 9px 11px 11px;
+      font-size: 12px;
+    }
+
+    .tooltip-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      color: var(--muted);
+    }
+
+    .tooltip-row strong {
+      color: var(--text);
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .legend {
+      display: flex;
+      gap: 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend i {
+      display: inline-block;
+      width: 24px;
+      height: 3px;
+      margin-right: 6px;
+      vertical-align: middle;
+      border-radius: 999px;
+    }
+
+    .range-info {
+      margin-left: auto;
+      color: #d6e8e8;
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    .lower {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .table-wrap {
+      max-height: 330px;
+      overflow: auto;
+      border: 1px solid rgba(54, 81, 91, 0.65);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 760px;
+    }
+
+    th,
+    td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(54, 81, 91, 0.45);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #102029;
+      color: #b9cccc;
+      z-index: 1;
+    }
+
+    td {
+      color: var(--muted);
+    }
+
+    .best td {
+      color: var(--green);
+      background: rgba(117, 223, 150, 0.1);
+    }
+
+    .best-badge {
+      display: inline-flex;
+      margin-left: 8px;
+      border: 1px solid rgba(117, 223, 150, 0.65);
+      border-radius: 999px;
+      padding: 2px 6px;
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .empty {
+      padding: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1120px) {
+      .grid,
+      .lower {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .status-strip {
+        justify-content: flex-start;
+      }
+
+      .chart-wrap {
+        height: 360px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .shell {
+        width: min(100% - 20px, 1500px);
+        padding-top: 18px;
+      }
+
+      .topbar {
+        gap: 14px;
+      }
+
+      h1 {
+        font-size: 34px;
+      }
+
+      .side-panel,
+      .chart-panel,
+      .table-panel {
+        padding: 12px;
+      }
+
+      .metric-stack {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .metric {
+        padding: 10px;
+      }
+
+      .metric strong {
+        font-size: 21px;
+        overflow-wrap: anywhere;
+      }
+
+      .chart-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: 100%;
+      }
+
+      select,
+      .button {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .toolbar-controls select {
+        grid-column: 1 / -1;
+      }
+
+      .chart-wrap {
+        height: 320px;
+      }
+
+      .chart-tooltip {
+        width: min(270px, calc(100% - 20px));
+      }
+
+      .legend {
+        flex-wrap: wrap;
+        gap: 8px 12px;
+      }
+
+      .range-info {
+        width: 100%;
+        margin-left: 0;
+      }
+
+      .section-title {
+        flex-wrap: wrap;
+      }
+
+      .table-wrap {
+        max-height: 430px;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      table {
+        min-width: 720px;
+      }
+
+      th,
+      td {
+        padding: 8px;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .metric-stack {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>Velora Training Logbook</h1>
+        <p class="subtitle">
+          A static browser-only dashboard for the provided training run:
+          <span class="run-id">runpod_sambhav_100m_v1_hybrid_10b</span>.
+        </p>
+      </div>
+      <div class="status-strip" id="statusStrip"></div>
+    </header>
+
+    <section class="grid">
+      <aside class="panel side-panel">
+        <div class="section-title">Run Snapshot</div>
+        <div class="metric-stack" id="metrics"></div>
+      </aside>
+
+      <section class="panel chart-panel">
+        <div class="chart-toolbar">
+          <div class="section-title" style="margin:0">Training Curve</div>
+          <div class="toolbar-controls">
+            <select id="metricSelect" aria-label="Chart metric">
+              <option value="loss_both">Loss: train + val</option>
+              <option value="loss_train">Training loss only</option>
+              <option value="loss_val">Validation loss only</option>
+              <option value="tps">Tokens per second</option>
+              <option value="grad">Gradient norm</option>
+              <option value="vram">Reserved VRAM</option>
+              <option value="lr">Learning rate</option>
+            </select>
+            <select id="zoomSelect" aria-label="Chart zoom range">
+              <option value="full">Full run</option>
+              <option value="first">First 25%</option>
+              <option value="middle">Middle 50%</option>
+              <option value="final">Final 25%</option>
+              <option value="best">Around best val</option>
+            </select>
+            <button class="button" id="downloadCsv">CSV</button>
+            <button class="button" id="downloadPng">PNG</button>
+          </div>
+        </div>
+        <div class="chart-wrap" id="chartWrap">
+          <canvas id="chart" tabindex="0" aria-label="Training curve. Move the pointer over the chart to inspect exact values."></canvas>
+          <div class="chart-tooltip" id="chartTooltip" role="status" aria-live="polite"></div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </section>
+    </section>
+
+    <section class="lower">
+      <section class="panel table-panel">
+        <div class="section-title">
+          Validation Steps
+          <span id="rowCount" style="color:var(--muted);font-size:12px;text-transform:none;letter-spacing:0"></span>
+        </div>
+        <div class="table-wrap" id="tableWrap"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="training-log-default.js"></script>
+  <script>
+    const FALLBACK_DATA = {
+      name: "training-log",
+      params: "-",
+      examples: "provided training run",
+      source: "",
+      train: [],
+      val: []
+    };
+    const DEFAULT_DATA = window.VELORA_DEFAULT_RUN || FALLBACK_DATA;
+
+    const state = structuredClone(DEFAULT_DATA);
+    const chartWrap = document.getElementById("chartWrap");
+    const chart = document.getElementById("chart");
+    const ctx = chart.getContext("2d");
+    const chartTooltip = document.getElementById("chartTooltip");
+    const metricSelect = document.getElementById("metricSelect");
+    const zoomSelect = document.getElementById("zoomSelect");
+    const metricsEl = document.getElementById("metrics");
+    const statusStrip = document.getElementById("statusStrip");
+    const legendEl = document.getElementById("legend");
+    const tableWrap = document.getElementById("tableWrap");
+    const rowCount = document.getElementById("rowCount");
+    let chartPoints = [];
+    let chartPlot = null;
+    let pointerFrame = 0;
+    let latestPointer = null;
+    const chartHover = {pointId: null};
+    const MAX_CHART_POINTS = 180;
+
+    function fmt(value, digits = 4) {
+      if (!Number.isFinite(value)) return "-";
+      if (Math.abs(value) >= 1000) return Math.round(value).toLocaleString();
+      if (Math.abs(value) < 0.0001 && value !== 0) return value.toExponential(2);
+      return Number(value.toFixed(digits)).toLocaleString();
+    }
+
+    function fmtTooltip(value, key) {
+      if (!Number.isFinite(value)) return "-";
+      if (key === "lr") return value === 0 ? "0" : value.toExponential(2);
+      if (key === "tokens" || key === "targetTokens" || key === "step" || key === "tps") return fmt(value, 0);
+      if (key === "vram") return `${fmt(value, 2)} GB`;
+      return fmt(value, 5);
+    }
+
+    function bestVal() {
+      return state.val.reduce((best, row) => row.valLoss < best.valLoss ? row : best, {step: 0, valLoss: Infinity});
+    }
+
+    function latestTrain() {
+      return state.train[state.train.length - 1] || {};
+    }
+
+    function latestVal() {
+      return state.val[state.val.length - 1] || {};
+    }
+
+    function avg(rows, key) {
+      const values = rows.map(row => row[key]).filter(Number.isFinite);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : NaN;
+    }
+
+    function progressInfo() {
+      const latest = latestTrain();
+      if (Number.isFinite(latest.tokens) && Number.isFinite(latest.targetTokens)) {
+        const done = latest.tokens / 1_000_000_000;
+        const total = latest.targetTokens / 1_000_000_000;
+        const pct = (latest.tokens / latest.targetTokens) * 100;
+        return {
+          label: `${fmt(done, 2)}B/${fmt(total, 2)}B`,
+          note: `${fmt(pct, 2)}% sampled tokens`
+        };
+      }
+      return {
+        label: `${fmt(latest.step, 0)}/${fmt(latest.target || latest.step, 0)}`,
+        note: "optimizer steps"
+      };
+    }
+
+    function renderStatus() {
+      const latest = latestTrain();
+      const best = bestVal();
+      const progress = progressInfo();
+      const chips = [
+        ["run", state.name],
+        ["progress", progress.label],
+        ["best val", fmt(best.valLoss, 4)],
+        ["tok/s", fmt(avg(state.train.slice(-8), "tps"), 0)]
+      ];
+      statusStrip.innerHTML = chips.map(([label, value]) => `<span class="chip">${label}: <strong>${value}</strong></span>`).join("");
+    }
+
+    function renderMetrics() {
+      const latest = latestTrain();
+      const val = latestVal();
+      const best = bestVal();
+      const progress = progressInfo();
+      const cards = [
+        {label: "Progress", value: progress.label, note: progress.note},
+        {label: "Best val", value: fmt(best.valLoss, 4), note: `step ${fmt(best.step, 0)}`, best: true},
+        {label: "Final val", value: fmt(val.valLoss, 4), note: `step ${fmt(val.step, 0)}`},
+        {label: "Speed", value: `${fmt(avg(state.train.slice(-8), "tps"), 0)}`, note: "tokens/sec recent avg"},
+        {label: "VRAM", value: `${fmt(latest.vram, 1)} GB`, note: "reserved"},
+        {label: "Model", value: state.params || "-", note: state.examples || "custom PyTorch checkpoint"}
+      ];
+      metricsEl.innerHTML = cards.map(card => `
+        <div class="metric ${card.best ? "best-metric" : ""}">
+          <span>${card.label}</span>
+          <strong>${card.value}</strong>
+          <small>${card.note}</small>
+        </div>
+      `).join("");
+    }
+
+    function averageNumber(rows, key) {
+      const values = rows.map(row => row[key]).filter(Number.isFinite);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined;
+    }
+
+    function nearestByStep(rows, step) {
+      if (!rows.length || !Number.isFinite(step)) return null;
+      let nearest = rows[0];
+      let bestDistance = Math.abs((nearest.step || 0) - step);
+      for (const row of rows) {
+        if (!Number.isFinite(row.step)) continue;
+        const distance = Math.abs(row.step - step);
+        if (distance < bestDistance) {
+          nearest = row;
+          bestDistance = distance;
+        }
+      }
+      return nearest;
+    }
+
+    function nearestTrainRow(step) {
+      return nearestByStep(state.train, step);
+    }
+
+    function nearestValRow(step) {
+      return nearestByStep(state.val, step);
+    }
+
+    function groupedRows(rows, key, maxPoints = MAX_CHART_POINTS) {
+      const clean = rows
+        .filter(row => Number.isFinite(row.step) && Number.isFinite(row[key]))
+        .sort((a, b) => a.step - b.step);
+      if (clean.length <= maxPoints) {
+        return clean.map(row => ({
+          ...row,
+          _chunkSize: 1,
+          _stepStart: row.step,
+          _stepEnd: row.step,
+          _sourceRow: row
+        }));
+      }
+
+      const bucketSize = Math.ceil(clean.length / maxPoints);
+      const grouped = [];
+      for (let i = 0; i < clean.length; i += bucketSize) {
+        const chunk = clean.slice(i, i + bucketSize);
+        const middle = chunk[Math.floor(chunk.length / 2)];
+        const row = {...middle};
+        for (const field of ["step", "tokens", "targetTokens", "loss", "valLoss", "lr", "grad", "tps", "vram"]) {
+          const value = averageNumber(chunk, field);
+          if (Number.isFinite(value)) row[field] = value;
+        }
+        row._chunkSize = chunk.length;
+        row._stepStart = chunk[0].step;
+        row._stepEnd = chunk[chunk.length - 1].step;
+        row._tokenStart = chunk[0].tokens;
+        row._tokenEnd = chunk[chunk.length - 1].tokens;
+        row._sourceRow = middle;
+        grouped.push(row);
+      }
+      return grouped;
+    }
+
+    function exactRows(rows, key) {
+      return rows
+        .filter(row => Number.isFinite(row.step) && Number.isFinite(row[key]))
+        .sort((a, b) => a.step - b.step)
+        .map(row => ({
+          ...row,
+          _chunkSize: 1,
+          _stepStart: row.step,
+          _stepEnd: row.step,
+          _sourceRow: row
+        }));
+    }
+
+    function seriesForMetric() {
+      const metric = metricSelect.value;
+      const trainLoss = {name: "train loss", key: "loss", rows: groupedRows(state.train, "loss"), color: "#37d7bd", markerEvery: 4};
+      const valLoss = {name: "validation loss", key: "valLoss", rows: exactRows(state.val, "valLoss"), color: "#f0b84b", markerEvery: 1};
+      if (metric === "loss_both") return [trainLoss, valLoss];
+      if (metric === "loss_train") return [trainLoss];
+      if (metric === "loss_val") return [valLoss];
+
+      const config = {
+        tps: ["tokens/sec", "tps", "#6aa5ff"],
+        grad: ["grad norm", "grad", "#ff6b6b"],
+        vram: ["reserved VRAM", "vram", "#75df96"],
+        lr: ["learning rate", "lr", "#f0b84b"]
+      }[metric];
+      return [{name: config[0], key: config[1], rows: groupedRows(state.train, config[1]), color: config[2], markerEvery: 4}];
+    }
+
+    function chartZoomRange(xMin, xMax) {
+      const span = xMax - xMin;
+      if (!Number.isFinite(span) || span <= 0) return {min: xMin, max: xMax};
+      const clampRange = (min, max) => {
+        const width = max - min;
+        if (min < xMin) return {min: xMin, max: Math.min(xMax, xMin + width)};
+        if (max > xMax) return {min: Math.max(xMin, xMax - width), max: xMax};
+        return {min, max};
+      };
+
+      if (zoomSelect.value === "first") return {min: xMin, max: xMin + span * 0.25};
+      if (zoomSelect.value === "middle") return {min: xMin + span * 0.25, max: xMin + span * 0.75};
+      if (zoomSelect.value === "final") return {min: xMin + span * 0.75, max: xMax};
+      if (zoomSelect.value === "best") {
+        const best = bestVal();
+        const center = Number.isFinite(best.step) ? best.step : xMin + span / 2;
+        const halfWidth = Math.max(span * 0.08, 2000);
+        return clampRange(center - halfWidth, center + halfWidth);
+      }
+      return {min: xMin, max: xMax};
+    }
+
+    function visibleRows(rows, minStep, maxStep) {
+      return rows.filter(row => row.step >= minStep && row.step <= maxStep);
+    }
+
+    function pointId(point) {
+      const tokenKey = point.row.tokens ?? "";
+      return `${point.seriesName}|${point.key}|${point.row.step}|${tokenKey}|${point.value}`;
+    }
+
+    function activePoint() {
+      return chartHover.pointId ? chartPoints.find(point => point.id === chartHover.pointId) : null;
+    }
+
+    function tooltipTitle(point) {
+      return metricSelect.value === "loss_both" ? "loss" : point.seriesName;
+    }
+
+    function tooltipRows(point) {
+      const train = point.key === "loss" ? point.row : nearestTrainRow(point.row.step);
+      const val = point.key === "valLoss" ? point.row : nearestValRow(point.row.step);
+      const rows = [["step", fmtTooltip(point.row.step, "step")]];
+      if (metricSelect.value === "loss_both") {
+        if (Number.isFinite(train?.loss)) rows.push(["train loss", fmtTooltip(point.key === "loss" ? point.value : train.loss, "loss")]);
+        if (Number.isFinite(val?.valLoss)) rows.push(["val loss", fmtTooltip(point.key === "valLoss" ? point.value : val.valLoss, "valLoss")]);
+        return rows;
+      }
+      if (point.key === "loss") rows.push(["train loss", fmtTooltip(point.value, "loss")]);
+      else if (point.key === "valLoss") rows.push(["val loss", fmtTooltip(point.value, "valLoss")]);
+      else {
+        const labels = {tps: "tok/s", grad: "grad", vram: "vram", lr: "lr"};
+        rows.push([labels[point.key] || "value", fmtTooltip(point.value, point.key)]);
+      }
+      return rows;
+    }
+
+    function showTooltip(point) {
+      const rows = tooltipRows(point);
+      chartTooltip.innerHTML = `
+        <div class="tooltip-title">
+          <span class="tooltip-dot" style="background:${point.color};box-shadow:0 0 0 5px ${point.glow}"></span>
+          ${escapeHtml(tooltipTitle(point))}
+        </div>
+        <div class="tooltip-rows">
+          ${rows.map(([label, value]) => `
+            <div class="tooltip-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>
+          `).join("")}
+        </div>
+      `;
+      const width = chartWrap.clientWidth;
+      const height = chartWrap.clientHeight;
+      const boxWidth = Math.min(280, width - 24);
+      const left = point.x > width - boxWidth - 20 ? point.x - boxWidth - 14 : point.x + 14;
+      const top = point.y > height - 170 ? point.y - 150 : point.y + 14;
+      chartTooltip.style.left = `${Math.max(12, Math.min(left, width - boxWidth - 12))}px`;
+      chartTooltip.style.top = `${Math.max(12, Math.min(top, height - 140))}px`;
+      chartTooltip.classList.add("visible");
+    }
+
+    function clearChartHover(redraw = true) {
+      const hadHover = Boolean(chartHover.pointId);
+      chartHover.pointId = null;
+      chartTooltip.classList.remove("visible");
+      if (redraw && hadHover) drawChart();
+    }
+
+    function nearestPoint(clientX, clientY) {
+      if (!chartPlot || !chartPoints.length) return null;
+      const rect = chart.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      if (x < chartPlot.left || x > chartPlot.right || y < chartPlot.top || y > chartPlot.bottom) return null;
+      return chartPoints.reduce((best, point) => {
+        const distance = Math.hypot((point.x - x) * 0.7, point.y - y);
+        return !best || distance < best.distance ? {point, distance} : best;
+      }, null)?.point || null;
+    }
+
+    function handleChartPointer(event) {
+      latestPointer = {x: event.clientX, y: event.clientY};
+      if (pointerFrame) return;
+      pointerFrame = requestAnimationFrame(() => {
+        pointerFrame = 0;
+        if (!latestPointer) return;
+        const point = nearestPoint(latestPointer.x, latestPointer.y);
+        if (!point) {
+          clearChartHover();
+          return;
+        }
+        if (chartHover.pointId !== point.id) {
+          chartHover.pointId = point.id;
+          drawChart();
+        }
+        showTooltip(activePoint() || point);
+      });
+    }
+
+    function drawChart() {
+      const ratio = window.devicePixelRatio || 1;
+      const rect = chart.getBoundingClientRect();
+      chart.width = Math.floor(rect.width * ratio);
+      chart.height = Math.floor(rect.height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      const width = rect.width;
+      const height = rect.height;
+      const compact = width < 560;
+      const pad = compact ? {top: 26, right: 12, bottom: 42, left: 52} : {top: 28, right: 24, bottom: 44, left: 64};
+      const plotW = width - pad.left - pad.right;
+      const plotH = height - pad.top - pad.bottom;
+      const series = seriesForMetric();
+      const allXs = series.flatMap(s => s.rows.map(row => row.step)).filter(Number.isFinite);
+      let xMin = Math.min(...allXs);
+      let xMax = Math.max(...allXs);
+      if (xMin === xMax) xMax += 1;
+      const zoom = chartZoomRange(xMin, xMax);
+      const visibleSeries = series.map(s => ({
+        ...s,
+        rows: visibleRows(s.rows, zoom.min, zoom.max)
+      }));
+      const xs = visibleSeries.flatMap(s => s.rows.map(row => row.step)).filter(Number.isFinite);
+      const ys = visibleSeries.flatMap(s => s.rows.map(row => row[s.key])).filter(Number.isFinite);
+      chartPoints = [];
+      chartPlot = {left: pad.left, right: width - pad.right, top: pad.top, bottom: height - pad.bottom};
+
+      ctx.clearRect(0, 0, width, height);
+      if (!xs.length || !ys.length) {
+        chartTooltip.classList.remove("visible");
+        ctx.fillStyle = "#8fa5aa";
+        ctx.textAlign = "center";
+        ctx.fillText("No training data is available for this view.", width / 2, height / 2);
+        return;
+      }
+
+      xMin = zoom.min;
+      xMax = zoom.max;
+      let yMin = Math.min(...ys);
+      let yMax = Math.max(...ys);
+      if (yMin === yMax) yMax += 1;
+      const yPad = (yMax - yMin) * 0.12;
+      yMin -= yPad;
+      yMax += yPad;
+
+      const toX = value => pad.left + ((value - xMin) / (xMax - xMin)) * plotW;
+      const toY = value => pad.top + plotH - ((value - yMin) / (yMax - yMin)) * plotH;
+
+      ctx.strokeStyle = "rgba(143, 165, 170, 0.18)";
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "#8fa5aa";
+      ctx.font = `${compact ? 10 : 12}px Cascadia Mono, Consolas, monospace`;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const tickCount = compact ? 4 : 5;
+      for (let i = 0; i <= tickCount; i++) {
+        const y = pad.top + (plotH / tickCount) * i;
+        const value = yMax - ((yMax - yMin) / tickCount) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(width - pad.right, y);
+        ctx.stroke();
+        ctx.fillText(fmt(value, 4), pad.left - 10, y);
+      }
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let i = 0; i <= tickCount; i++) {
+        const x = pad.left + (plotW / tickCount) * i;
+        const value = xMin + ((xMax - xMin) / tickCount) * i;
+        ctx.fillText(fmt(value, 0), x, height - pad.bottom + 15);
+      }
+
+      for (const s of visibleSeries) {
+        const points = s.rows
+          .filter(row => Number.isFinite(row.step) && Number.isFinite(row[s.key]))
+          .map(row => {
+            const value = row[s.key];
+            const point = {
+              x: toX(row.step),
+              y: toY(value),
+              row,
+              value,
+              key: s.key,
+              color: s.color,
+              glow: s.color === "#f0b84b" ? "rgba(240, 184, 75, 0.16)" : "rgba(55, 215, 189, 0.16)",
+              seriesName: s.name
+            };
+            point.id = pointId(point);
+            chartPoints.push(point);
+            return point;
+          });
+        if (!points.length) continue;
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        points.forEach(({x, y}, index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+        ctx.stroke();
+        ctx.fillStyle = s.color;
+        for (const [index, point] of points.entries()) {
+          if (s.markerEvery > 1 && index % s.markerEvery !== 0 && index !== points.length - 1) continue;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 2.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      const best = bestVal();
+      const hasValidationSeries = visibleSeries.some(s => s.key === "valLoss");
+      const bestIsVisible = best.step >= xMin && best.step <= xMax;
+      if (metricSelect.value.startsWith("loss_") && hasValidationSeries && bestIsVisible && Number.isFinite(best.step) && Number.isFinite(best.valLoss)) {
+        const x = toX(best.step);
+        const y = toY(best.valLoss);
+        ctx.save();
+        ctx.fillStyle = "#071014";
+        ctx.strokeStyle = "#75df96";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(x, y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#75df96";
+        ctx.font = "700 11px Aptos, Segoe UI, sans-serif";
+        ctx.textAlign = x > width - 110 ? "right" : "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillText("best val", x > width - 110 ? x - 10 : x + 10, y - 9);
+        ctx.restore();
+      }
+
+      const hovered = activePoint();
+      if (hovered) {
+        ctx.save();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = "rgba(231, 242, 242, 0.32)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(hovered.x, pad.top);
+        ctx.lineTo(hovered.x, height - pad.bottom);
+        ctx.moveTo(pad.left, hovered.y);
+        ctx.lineTo(width - pad.right, hovered.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#071014";
+        ctx.strokeStyle = hovered.color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(hovered.x, hovered.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.fillStyle = "#8fa5aa";
+      ctx.font = "12px Aptos, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("step", pad.left + plotW / 2, height - 18);
+      const rangeLabel = zoomSelect.value === "full" ? "full run" : `${fmt(xMin, 0)} - ${fmt(xMax, 0)} steps`;
+      legendEl.innerHTML = `${visibleSeries.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("")}<span class="range-info">view: ${rangeLabel}</span>`;
+    }
+
+    function validationStepRows() {
+      const best = bestVal();
+      return state.val
+        .filter(row => Number.isFinite(row.step) && Number.isFinite(row.valLoss))
+        .slice()
+        .sort((a, b) => a.step - b.step)
+        .map((valRow, index) => ({
+          check: index + 1,
+          isBest: valRow.step === best.step && valRow.valLoss === best.valLoss,
+          val: valRow,
+          train: nearestTrainRow(valRow.step)
+        }));
+    }
+
+    function renderTable() {
+      const rows = validationStepRows();
+      const valCount = state.fullValRows || state.val.length;
+      rowCount.textContent = `all ${rows.length} of ${valCount} validation checks, start to final`;
+      if (!rows.length) {
+        tableWrap.innerHTML = `<div class="empty">No validation rows available.</div>`;
+        return;
+      }
+      tableWrap.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>check</th><th>step</th><th>tokens</th><th>train loss</th><th>val loss</th><th>lr</th><th>grad</th><th>tok/s</th><th>vram</th></tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr class="${row.isBest ? "best" : ""}">
+                <td>${row.check}${row.isBest ? ' <span class="best-badge">best</span>' : ''}</td>
+                <td>${fmt(row.val.step, 0)}</td>
+                <td>${row.val.tokens === undefined ? "" : fmt(row.val.tokens, 0)}</td>
+                <td>${row.train?.loss === undefined ? "" : fmt(row.train.loss, 4)}</td>
+                <td>${fmt(row.val.valLoss, 4)}</td>
+                <td>${row.train?.lr === undefined ? "" : fmtTooltip(row.train.lr, "lr")}</td>
+                <td>${row.train?.grad === undefined ? "" : fmt(row.train.grad, 2)}</td>
+                <td>${row.train?.tps === undefined ? "" : fmt(row.train.tps, 0)}</td>
+                <td>${row.train?.vram === undefined ? "" : fmt(row.train.vram, 1)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderAll() {
+      clearChartHover(false);
+      renderStatus();
+      renderMetrics();
+      renderTable();
+      drawChart();
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+      }[char]));
+    }
+
+    function rowsToCsv() {
+      const header = ["check","isBest","step","tokens","trainLoss","valLoss","lr","grad","tokensPerSecond","vram"];
+      const rows = validationStepRows().map(row => [
+        row.check,
+        row.isBest ? "yes" : "",
+        row.val.step,
+        row.val.tokens,
+        row.train?.loss,
+        row.val.valLoss,
+        row.train?.lr,
+        row.train?.grad,
+        row.train?.tps,
+        row.train?.vram
+      ]);
+      return [header, ...rows].map(row => row.map(value => `"${value ?? ""}"`).join(",")).join("\n");
+    }
+
+    function download(name, type, content) {
+      const blob = new Blob([content], {type});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById("downloadCsv").addEventListener("click", () => {
+      download("velora-training-log.csv", "text/csv;charset=utf-8", rowsToCsv());
+    });
+
+    document.getElementById("downloadPng").addEventListener("click", () => {
+      download("velora-training-log.png", "image/png", chart.toDataURL("image/png"));
+    });
+
+    chart.addEventListener("pointermove", handleChartPointer);
+    chart.addEventListener("pointerdown", handleChartPointer);
+    chart.addEventListener("click", handleChartPointer);
+    chart.addEventListener("pointerleave", () => {
+      latestPointer = null;
+      if (pointerFrame) cancelAnimationFrame(pointerFrame);
+      pointerFrame = 0;
+      clearChartHover();
+    });
+    chart.addEventListener("blur", () => clearChartHover());
+    metricSelect.addEventListener("change", () => {
+      clearChartHover(false);
+      drawChart();
+    });
+    zoomSelect.addEventListener("change", () => {
+      clearChartHover(false);
+      drawChart();
+    });
+    window.addEventListener("resize", () => {
+      clearChartHover(false);
+      drawChart();
+    });
+    renderAll();
+  </script>
+</body>
+</html>

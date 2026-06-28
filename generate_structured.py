@@ -9,6 +9,9 @@ import xml.etree.ElementTree as ET
 import torch
 from tokenizers import Tokenizer
 
+from src.guided import add_regex_guidance_args, build_regex_logits_processor
+from src.json_guided import add_json_guidance_args, build_json_logits_processor
+from src.inference import checkpoint_error_message, checkpoint_exists
 from src.model import GPT, ModelConfig
 
 
@@ -101,7 +104,12 @@ def main() -> None:
     parser.add_argument("--repetition_penalty", type=float, default=1.0)
     parser.add_argument("--no_repeat_ngram_size", type=int, default=0)
     parser.add_argument("--seed", type=int, default=None)
+    add_regex_guidance_args(parser)
+    add_json_guidance_args(parser)
     args = parser.parse_args()
+
+    if not checkpoint_exists(args.checkpoint):
+        parser.error(checkpoint_error_message(args.checkpoint))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.seed is not None:
@@ -120,6 +128,12 @@ def main() -> None:
     prompt = format_prompt(args.instruction, args.input)
     ids = tok.encode(prompt, add_special_tokens=False).ids
     x = torch.tensor([ids], dtype=torch.long, device=device)
+    if args.regex:
+        logits_processor, eos_token_id = build_regex_logits_processor(args, tok, [x.size(1)])
+    elif args.format == "json" and not args.no_json_guide:
+        logits_processor, eos_token_id = build_json_logits_processor(args, tok, [x.size(1)])
+    else:
+        logits_processor, eos_token_id = None, None
     with torch.no_grad():
         y = model.generate(
             x,
@@ -129,6 +143,8 @@ def main() -> None:
             top_p=args.top_p,
             repetition_penalty=args.repetition_penalty,
             no_repeat_ngram_size=args.no_repeat_ngram_size,
+            logits_processor=logits_processor,
+            eos_token_id=eos_token_id,
         )
 
     text = tok.decode(y[0].tolist(), skip_special_tokens=False)

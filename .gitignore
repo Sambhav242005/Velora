@@ -20,6 +20,7 @@ data/
 # Checkpoints, model weights, and generated packages
 out/
 mlrunner_package/
+hf_repo/
 *.pt
 *.pth
 *.safetensors
@@ -41,7 +42,7 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Secrets / credentials — never commit real values
+# Secrets / credentials -- never commit real values
 .env
 .env.*
 !.env.example

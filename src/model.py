@@ -584,6 +584,8 @@ class GPT(nn.Module):
         top_p: Optional[float] = None,
         repetition_penalty: float = 1.0,
         no_repeat_ngram_size: int = 0,
+        logits_processor: Optional[Callable[[torch.Tensor, torch.Tensor], None]] = None,
+        eos_token_id: Optional[int] = None,
     ):
         self.eval()
         for _ in range(max_new_tokens):
@@ -592,6 +594,8 @@ class GPT(nn.Module):
             logits = logits[:, -1, :]
             self._apply_repetition_penalty(logits, idx, repetition_penalty)
             self._apply_no_repeat_ngram(logits, idx, no_repeat_ngram_size)
+            if logits_processor is not None:
+                logits_processor(logits, idx)
             if temperature <= 0:
                 next_id = torch.argmax(logits, dim=-1, keepdim=True)
             else:
@@ -611,6 +615,8 @@ class GPT(nn.Module):
                 probs = F.softmax(logits, dim=-1)
                 next_id = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, next_id), dim=1)
+            if eos_token_id is not None and bool((next_id == int(eos_token_id)).all().item()):
+                break
         return idx
 
     def num_parameters(self) -> int:

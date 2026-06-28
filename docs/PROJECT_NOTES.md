@@ -222,6 +222,7 @@ All on branch `v3-longcontext` (not yet committed at time of writing):
 | Persisted logs + JSONL metrics | `train.py`, `train_sft.py`, `src/trainer.py` | ✅ CLI parse + trainer smoke |
 | Long-context eval (GSM8K + passkey + loss-by-position) | `scripts/eval_longctx.py` | ✅ parses/imports |
 | Interactive multi-turn chat REPL | `chat.py` | ✅ parses/imports |
+| Indexed automaton guided decoding | `src/guided.py`, `src/json_guided.py`, `src/model.py`, `generate*.py`, `chat.py` | verified: `py_compile`; regex automaton, JSON parser-state/fixed-key/type index, EOS-hook smoke |
 | RunPod runbook | `docs/runpod_longcontext_plan.md` | — |
 
 **Re-verified 2026-06-05 (local):** all 6 `v3_*` configs build an 80.6M model; forward+backward is finite through every attention mode (`full`, `sliding`, `csa`, `hca`) and the gradient-checkpointing path; `generate()` runs; the 1B checkpoint warm-loads `strict=True`; tokenizer present.

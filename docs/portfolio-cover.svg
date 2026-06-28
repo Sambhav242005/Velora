@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Velora trainer architecture cover</title>
+  <desc id="desc">A static diagram of the repository workflow: YAML configs and prepared token data flow into a single-process PyTorch trainer, a LLaMA-style decoder model, checkpoint resume, evaluation, and guided JSON inference.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.52" stop-color="#101c2f"/>
+      <stop offset="1" stop-color="#16251f"/>
+    </linearGradient>
+    <linearGradient id="model" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f9d8a"/>
+      <stop offset="1" stop-color="#4f7cff"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f2c14e"/>
+      <stop offset="1" stop-color="#f38d68"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dd3fc"/>
+    </marker>
+    <marker id="smallArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dd3fc"/>
+    </marker>
+    <style>
+      .label { font-family: Inter, Segoe UI, Arial, sans-serif; fill: #e8f2ff; }
+      .muted { fill: #9fb3c8; }
+      .tiny { font-size: 18px; font-weight: 600; }
+      .small { font-size: 22px; font-weight: 700; }
+      .mid { font-size: 28px; font-weight: 800; }
+      .title { font-size: 46px; font-weight: 850; letter-spacing: 0; }
+      .card { fill: rgba(15, 27, 46, 0.92); stroke: rgba(148, 207, 255, 0.32); stroke-width: 2; }
+      .line { stroke: #7dd3fc; stroke-width: 3; fill: none; marker-end: url(#arrow); opacity: 0.9; }
+      .stageLine { stroke: #7dd3fc; stroke-width: 2; fill: none; marker-end: url(#smallArrow); opacity: 0.78; }
+      .thin { stroke: rgba(125, 211, 252, 0.38); stroke-width: 2; fill: none; }
+      .chip { fill: rgba(255, 255, 255, 0.09); stroke: rgba(255, 255, 255, 0.16); stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="url(#bg)"/>
+  <path d="M0 614 C220 560 372 690 568 620 C756 552 876 582 1200 512 L1200 760 L0 760 Z" fill="#07111e" opacity="0.55"/>
+  <path d="M78 122 H1122" class="thin"/>
+
+  <text x="78" y="78" class="label title">Velora</text>
+  <text x="80" y="112" class="label tiny muted">single-process PyTorch LLaMA-style LM pipeline</text>
+  <text x="1122" y="84" text-anchor="end" class="label tiny muted">configs -> train -> guided JSON</text>
+
+  <g filter="url(#softShadow)">
+    <rect x="72" y="168" width="234" height="126" rx="16" class="card"/>
+    <text x="100" y="210" class="label small">YAML configs</text>
+    <text x="100" y="244" class="label tiny muted">model + train blocks</text>
+    <text x="100" y="274" class="label tiny muted">resume, batch, eval</text>
+
+    <rect x="72" y="328" width="234" height="126" rx="16" class="card"/>
+    <text x="100" y="370" class="label small">Prepared data</text>
+    <text x="100" y="404" class="label tiny muted">FineWeb token shards</text>
+    <text x="100" y="434" class="label tiny muted">SFT padded arrays</text>
+
+    <rect x="72" y="488" width="234" height="126" rx="16" class="card"/>
+    <text x="100" y="530" class="label small">Tokenizer 16k</text>
+    <text x="100" y="564" class="label tiny muted">BPE web vocab</text>
+    <text x="100" y="594" class="label tiny muted">JSON brace handled</text>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="396" y="160" width="410" height="418" rx="22" fill="rgba(9, 19, 34, 0.94)" stroke="#5aa6ff" stroke-opacity="0.55" stroke-width="2.5"/>
+    <rect x="424" y="190" width="354" height="82" rx="14" fill="url(#model)" opacity="0.95"/>
+    <text x="448" y="226" class="label mid">GPT core</text>
+    <text x="448" y="256" class="label tiny">compact decoder LM</text>
+
+    <rect x="428" y="306" width="78" height="184" rx="10" fill="#1a3354" stroke="#78c7ff" stroke-opacity="0.5"/>
+    <rect x="522" y="286" width="78" height="224" rx="10" fill="#173a44" stroke="#7ee0c3" stroke-opacity="0.55"/>
+    <rect x="616" y="306" width="78" height="184" rx="10" fill="#22324c" stroke="#b8c7ff" stroke-opacity="0.5"/>
+    <rect x="704" y="326" width="58" height="144" rx="10" fill="#2b3441" stroke="#f2c14e" stroke-opacity="0.5"/>
+
+    <text x="443" y="382" class="label tiny">GQA</text>
+    <text x="536" y="382" class="label tiny">RoPE</text>
+    <text x="627" y="382" class="label tiny">SwiGLU</text>
+    <text x="715" y="386" class="label tiny">RMS</text>
+
+    <rect x="424" y="524" width="354" height="34" rx="17" fill="rgba(125, 211, 252, 0.12)" stroke="#7dd3fc" stroke-opacity="0.38"/>
+    <text x="456" y="548" class="label tiny">full / sliding / csa / hca</text>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="874" y="168" width="254" height="118" rx="16" class="card"/>
+    <text x="902" y="208" class="label small">Trainer</text>
+    <text x="902" y="242" class="label tiny muted">auto micro-batch</text>
+    <text x="902" y="270" class="label tiny muted">OOM recovery</text>
+
+    <rect x="874" y="318" width="254" height="118" rx="16" class="card"/>
+    <text x="902" y="358" class="label small">Checkpoints</text>
+    <text x="902" y="392" class="label tiny muted">safe save</text>
+    <text x="902" y="420" class="label tiny muted">resume state</text>
+
+    <rect x="874" y="468" width="254" height="146" rx="16" class="card"/>
+    <text x="902" y="508" class="label small">Inference</text>
+    <text x="902" y="542" class="label tiny muted">chat + instruct</text>
+    <text x="902" y="570" class="label tiny muted">JSON parser guide</text>
+    <text x="902" y="598" class="label tiny muted">regex automaton guide</text>
+  </g>
+
+  <path d="M306 230 C348 230 354 218 392 218" class="line"/>
+  <path d="M306 390 C350 390 356 396 396 396" class="line"/>
+  <path d="M306 550 C344 550 354 526 396 526" class="line"/>
+  <path d="M806 226 C842 226 842 226 874 226" class="line"/>
+  <path d="M1001 286 C1001 306 1001 306 1001 318" class="line"/>
+  <path d="M806 540 C842 540 842 540 874 540" class="line"/>
+
+  <g>
+    <text x="386" y="613" class="label tiny muted">training stages</text>
+    <rect x="386" y="626" width="128" height="48" rx="24" class="chip"/>
+    <rect x="532" y="626" width="116" height="48" rx="24" class="chip"/>
+    <rect x="666" y="626" width="112" height="48" rx="24" class="chip"/>
+    <rect x="796" y="626" width="120" height="48" rx="24" class="chip"/>
+    <text x="416" y="657" class="label tiny">pretrain</text>
+    <text x="568" y="657" class="label tiny">CPT</text>
+    <text x="704" y="657" class="label tiny">SFT</text>
+    <text x="828" y="657" class="label tiny">16K ctx</text>
+    <path d="M518 650 H528" class="stageLine"/>
+    <path d="M652 650 H662" class="stageLine"/>
+    <path d="M782 650 H792" class="stageLine"/>
+  </g>
+
+  <g>
+    <rect x="72" y="678" width="246" height="38" rx="19" fill="rgba(125, 211, 252, 0.14)" stroke="#7dd3fc" stroke-opacity="0.38"/>
+    <text x="100" y="704" class="label tiny">pure PyTorch trainer</text>
+    <rect x="866" y="678" width="262" height="38" rx="19" fill="rgba(125, 211, 252, 0.14)" stroke="#7dd3fc" stroke-opacity="0.38"/>
+    <text x="894" y="704" class="label tiny">metrics, eval, logs</text>
+  </g>
+</svg>

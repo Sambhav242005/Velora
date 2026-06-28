@@ -6,6 +6,8 @@ import sys
 import torch
 from tokenizers import Tokenizer
 
+from src.guided import add_regex_guidance_args, build_regex_logits_processor
+from src.inference import checkpoint_error_message, checkpoint_exists
 from src.model import GPT, ModelConfig
 from generate_instruct import format_prompt, extract_response, trim_sentences
 
@@ -42,7 +44,11 @@ def main() -> None:
     parser.add_argument("--max_answer_sentences", type=int, default=0, help="0 = no sentence trimming")
     parser.add_argument("--max_history_turns", type=int, default=6, help="user+assistant exchanges kept as context")
     parser.add_argument("--seed", type=int, default=None)
+    add_regex_guidance_args(parser)
     args = parser.parse_args()
+
+    if not checkpoint_exists(args.checkpoint):
+        parser.error(checkpoint_error_message(args.checkpoint))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.seed is not None:
@@ -76,6 +82,7 @@ def main() -> None:
         ids = tok.encode(prompt, add_special_tokens=False).ids
         ids = ids[-(block - args.max_new_tokens):]  # keep room for the reply
         x = torch.tensor([ids], dtype=torch.long, device=device)
+        logits_processor, eos_token_id = build_regex_logits_processor(args, tok, [x.size(1)])
         with torch.no_grad():
             y = model.generate(
                 x,
@@ -85,6 +92,8 @@ def main() -> None:
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
                 no_repeat_ngram_size=args.no_repeat_ngram_size,
+                logits_processor=logits_processor,
+                eos_token_id=eos_token_id,
             )
         reply = extract_response(tok.decode(y[0].tolist()))
         if args.max_answer_sentences > 0:

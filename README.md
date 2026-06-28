@@ -1,6 +1,65 @@
 # Velora
 
-This project is made for **local smoke testing first** and then a larger RunPod training run later.
+Velora is a from-scratch LLaMA-style decoder-only language model trainer and inference runtime for compact 80M-100M parameter models. It is pure single-process PyTorch: no DeepSpeed, no HuggingFace `Trainer`, and no hidden training framework.
+
+The repository is designed for:
+
+- local smoke tests before spending GPU time
+- interruptible RunPod training with automatic resume
+- long-context hybrid-attention experiments
+- instruction and structured-output fine-tuning
+- reproducible Hugging Face export bundles for custom PyTorch inference
+
+Model checkpoints, tokenized datasets, and exported Hugging Face folders are intentionally not committed. They live under `out/`, `data/`, and `hf_repo/`, which are ignored by Git.
+
+## Current status
+
+The current polished path is the 100M structured-output checkpoint family, ending at `sft_100m_structured_strict_ctx16k`. The retained best checkpoint is exported with `scripts/export_hf_repo.py` into a self-contained runtime bundle containing:
+
+- a slim inference checkpoint
+- tokenizer
+- `generator.py`
+- minimal runtime source files
+- `config.json`
+- model-card README
+
+Use the root repository for training, experimentation, and reproducibility. Use the exported `hf_repo/<repo-slug>/` folder for publishing model artifacts.
+
+## Quick inference
+
+Plain generation:
+
+```bash
+python generate.py --checkpoint out/<run>/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --prompt "Cloud computing is" --max_new_tokens 80
+```
+
+Instruction generation:
+
+```bash
+python generate_instruct.py --checkpoint out/<run>/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --instruction "What is artificial intelligence?" --max_new_tokens 120
+```
+
+Structured JSON generation uses parser-state guidance by default:
+
+```bash
+python generate_structured.py --checkpoint out/<run>/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --format json --instruction "Return a JSON object with keys answer and confidence." --json_key_types answer:boolean,confidence:number
+```
+
+## Training log viewer
+
+Open `docs/training-logbook.html` in a browser to inspect the included 10B-token 100M training run snapshot. The page is a static local-only dashboard for the provided run: it chunks dense training metrics for smoother charting, keeps validation loss exact, supports chart zoom ranges, compares train and validation loss on hover, highlights the best validation point, lists validation checks from start to final with nearby training parameters, and exports CSV/PNG.
+
+## Quantization
+
+Do not quantize the only published copy. Publish the normal slim checkpoint first so the model remains reproducible and easy to debug.
+
+Quantization is useful as an additional inference artifact if you want a smaller CPU/demo download. For this 100M-class custom PyTorch model, the practical order is:
+
+1. publish the slim full-precision export first
+2. optionally add a separate inference-only quantized artifact later
+3. label the quantized artifact clearly, because it is not meant for resume training
+
+At this size, quantization is optional. It saves disk and RAM, but it is not required for GitHub readiness and can make debugging structured decoding harder.
 
 It includes:
 
@@ -155,6 +214,18 @@ Generate:
 python generate.py --checkpoint out/local_fineweb_80m_tiny_16k_80m/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --prompt "Cloud computing is" --max_new_tokens 80
 ```
 
+Structured JSON generation uses a JSON parser-state guide automatically; no regex is required:
+
+```bash
+python generate_structured.py --checkpoint out/<run>/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --format json --instruction "Return a JSON object with keys answer and confidence." --json_key_types answer:boolean,confidence:number
+```
+
+Regex-guided generation is still available as a lower-level escape hatch for simple custom output languages:
+
+```bash
+python generate_instruct.py --checkpoint out/<run>/best.pt --tokenizer tokenizer_fineweb_16k/tokenizer.json --instruction "Answer yes or no: is 2+2=4?" --regex "\s*([Yy]es|[Nn]o)" --temperature 0
+```
+
 ## Instruction fine-tuning
 
 The base model is a text completer. To make a separate instruction-tuned model, first prepare SFT arrays. The recommended first dataset is `yahma/alpaca-cleaned` because it is a cleaned 52k instruction/input/output dataset with a simple schema. A second comparison config is included for `databricks/databricks-dolly-15k`.
@@ -186,7 +257,7 @@ Train a separate Dolly SFT checkpoint folder:
 Test an SFT model:
 
 ```bash
-.\.venv\Scripts\python.exe generate_instruct.py --checkpoint out\sft_alpaca_80m\best.pt --tokenizer tokenizer_fineweb_16k\tokenizer.json --instruction "What is artificial intelligence?" --max_new_tokens 120
+.\.venv\Scripts\python.exe generate_instruct.py --checkpoint out\<run>\best.pt --tokenizer tokenizer_fineweb_16k\tokenizer.json --instruction "What is artificial intelligence?" --max_new_tokens 120
 ```
 
 ## 4. Local smoke test
@@ -239,3 +310,21 @@ python train.py --config configs/runpod_80m_1b.yaml --resume auto
 - The local sample dataset is not enough to make a useful model.
 - For a real model, replace `data/raw/sample.txt` with clean dataset text files.
 - Keep checkpoints on a persistent disk/network volume when using RunPod.
+
+## Hugging Face export
+
+Create a self-contained Hugging Face model repo folder with the slim checkpoint, tokenizer, generator.py, minimal src/ runtime, requirements.txt, config.json, and a model-card README.md.
+
+PowerShell:
+
+    .\.venv\Scripts\python.exe scripts\export_hf_repo.py --repo_id sambhav24/velora-100m-structured-strict-ctx16k --checkpoint out\sft_100m_structured_strict_ctx16k\best.pt --tokenizer tokenizer_fineweb_16k\tokenizer.json --overwrite
+
+This writes hf_repo/velora-100m-structured-strict-ctx16k/. That folder is ignored by Git because it contains model artifacts.
+
+Before uploading, remove the stale files currently on the Hugging Face repo:
+
+    .\.venv\Scripts\hf.exe repos delete-files sambhav24/velora-100m-structured-strict-ctx16k best.pt generate_structured.py velora_structured_strict_ctx16k_artifacts.tar src/
+
+Then upload the generated bundle:
+
+    .\.venv\Scripts\hf.exe upload sambhav24/velora-100m-structured-strict-ctx16k hf_repo\velora-100m-structured-strict-ctx16k .
