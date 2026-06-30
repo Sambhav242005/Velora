@@ -140,6 +140,14 @@ Rules:
 - No fake product names, unrelated placeholder visuals, or generic charts.
 - The portfolio repo may copy this file into `public/project-assets` as the local backup/rendering copy.
 
+## Portfolio Writing
+
+- `docs/writing/case-study.md` is the project's portfolio source.
+- The case-study frontmatter controls title, slug, summary, status, order, featured, and tags.
+- The markdown body controls the project detail page content.
+- Keep metadata current when the project changes.
+- Article files use `contentKind: article` and are separate from the case study.
+
 ## Git / workflow
 
 - Default branch is `main`. Prefer a feature branch for changes.
