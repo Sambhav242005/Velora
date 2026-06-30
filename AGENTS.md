@@ -142,7 +142,8 @@ Rules:
 
 ## Portfolio Writing
 
-- `docs/writing/case-study.md` is the project's portfolio source.
+- `docs/writing/velora.md` is the project's portfolio source.
+- Markdown files under `docs/writing/` can use any filename and can be nested in subfolders, such as `docs/writing/article-one.md`, `docs/writing/research/article-two.md`, or `docs/writing/drafts/article-three.md`.
 - The case-study frontmatter controls title, slug, summary, status, order, featured, and tags.
 - The markdown body controls the project detail page content.
 - Keep metadata current when the project changes.
